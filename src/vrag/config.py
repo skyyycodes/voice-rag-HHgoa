@@ -62,8 +62,12 @@ class Settings(BaseSettings):
     budget_guardrail_out_ms: float = 20.0
 
     # ---- guardrails --------------------------------------------------------
-    # Below this max fused score the query is treated as out-of-domain.
-    ood_score_floor: float = 0.34
+    # Out-of-domain detection is margin-based, not an absolute score floor:
+    # cosine magnitudes differ systematically by language, so a constant floor
+    # calibrated on Hindi rejects valid Tamil traffic. Both must be low to
+    # abstain. Calibrated by `vrag.calibrate_guardrails`.
+    ood_margin_floor: float = 1.0
+    ood_dense_floor: float = 0.80
     # Minimum lexical+semantic overlap between answer and cited chunk.
     grounding_floor: float = 0.45
     min_query_chars: int = 3
