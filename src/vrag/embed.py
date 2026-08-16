@@ -69,13 +69,39 @@ class OnnxEncoder:
         self.dim = int(self.session.get_outputs()[0].shape[-1])
 
     def encode(self, texts: Sequence[str], kind: Kind, batch_size: int = 64) -> np.ndarray:
+        """Encode a batch, sorting by length first.
+
+        Every sequence in a batch is padded to the longest member, and
+        attention is quadratic in that padded length. With chunks arriving in
+        corpus order, one 400-token chunk drags 63 short ones up to its length
+        and most of the compute is spent on padding. Sorting by length groups
+        similar sizes together, then the original order is restored — on this
+        corpus that is the difference between a ~50-minute index build and a
+        few minutes.
+
+        Only worth the bookkeeping in bulk; a single query skips it.
+        """
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        out = [
-            self._encode_batch(list(texts[i : i + batch_size]), kind)
-            for i in range(0, len(texts), batch_size)
-        ]
-        return np.vstack(out)
+        if len(texts) <= batch_size:
+            return self._encode_batch(list(texts), kind)
+
+        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
+        sorted_texts = [texts[i] for i in order]
+
+        encoded = np.vstack(
+            [
+                self._encode_batch(sorted_texts[i : i + batch_size], kind)
+                for i in range(0, len(sorted_texts), batch_size)
+            ]
+        )
+
+        # Scatter back so row i corresponds to texts[i]; callers index these
+        # rows against the chunk store, so a permuted result would silently
+        # attach every vector to the wrong chunk.
+        out = np.empty_like(encoded)
+        out[np.asarray(order)] = encoded
+        return out
 
     def _encode_batch(self, texts: list[str], kind: Kind) -> np.ndarray:
         encoded = self.tokenizer.encode_batch([kind.value + t for t in texts])
