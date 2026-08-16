@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     # ---- speech to text ----------------------------------------------------
     stt_provider: str = "sarvam"  # sarvam | elevenlabs
     sarvam_api_key: str = ""
-    sarvam_model: str = "saarika:v2.5"
+    sarvam_model: str = "saaras:v3"  # verified against the live API
     elevenlabs_api_key: str = ""
     elevenlabs_model: str = "scribe_v1"
     stt_timeout_s: float = 12.0
