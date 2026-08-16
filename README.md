@@ -7,9 +7,11 @@ verifies the answer is actually supported by the retrieved passages, and answers
 — or declines and says why.
 
 ```
-voice ──► Sarvam Saaras ──► input rails ──► hybrid retrieval ──► answer ──► grounding check ──► response
-          (STT)             safety /        dense + BM25          extractive   abstain if        + citations
-                            injection       + learned rerank      or Claude    unsupported       + per-stage timings
+voice ─► Sarvam Saaras ─► input rails ─► hybrid retrieval ────────► answer ────► grounding ─► response
+         (STT)            safety /       dense + BM25 + RRF        extractive     check       + citations
+                          injection /    + cross-encoder rerank    or Claude      abstain if  + per-stage
+                          personal       (depth set by remaining                  unsupported   timings
+                          scope           budget)
 ```
 
 Every response carries its own per-stage latency breakdown and the passage it
@@ -26,6 +28,7 @@ cp .env.example .env            # add SARVAM_API_KEY for voice input
 uv run python -m vrag.download           # fetch MSMARCO-XI shards (~1.4GB)
 uv run python -m vrag.build_index        # chunk, embed, index, fit reranker
 uv run python scripts/smoke.py           # end-to-end sanity check
+uv run python scripts/why_indic_rag_breaks.py   # the bug most Indic RAG has
 uv run python -m vrag.bench --n 400      # P50 / P70 / P100
 uv run uvicorn vrag.server:app --reload  # http://localhost:8000
 ```
@@ -149,9 +152,20 @@ Three stages, each measured against the others in `vrag.eval_retrieval`:
    which matters here specifically: dense cosine magnitudes are not comparable
    across language pairs, so any score-level blend would silently down-weight
    every cross-lingual hit.
-3. **Rerank** — a 7-feature linear model fitted by pairwise logistic regression
-   on the gold labels, with score features z-scored *within the candidate set*
-   so one weight vector is valid across every language.
+3. **Rerank** — two stages. A 7-feature linear model fitted by pairwise
+   logistic regression on the gold labels (score features z-scored *within the
+   candidate set*, so one weight vector is valid across every language), then a
+   multilingual cross-encoder over the head of the list. The cross-encoder is
+   where most of the ranking quality comes from — see *Spending the budget*
+   below.
+4. **Language preference** — an explicit, measured nudge toward answering in
+   the language the question was asked in. Applied last, and scoped to
+   candidates that share a scoring scale.
+
+The build **refuses to ship a linear reranker that does not generalise**: it
+must clear 0.55 held-out pairwise accuracy or the weights are discarded in
+favour of RRF-only ordering. On the build before the Indic tokenisation fix it
+scored 0.501 — exactly chance — and would have been rejected.
 
 The reranker's features are deliberately limited to things computable from the
 query and chunk text alone. `is_selected` **is** the retrieval label; using it
