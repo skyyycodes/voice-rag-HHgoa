@@ -1,92 +1,140 @@
 """Embedding tier.
 
-The 200ms budget is what dictates the model choice here. A transformer
-bi-encoder costs 10-30ms per query on CPU before any search happens, and on a
-cold free-tier container closer to 100ms. A *static* embedder (model2vec) has
-no forward pass at all: token vectors are looked up from a table and pooled, so
-encoding a query is a gather plus a mean — tens of microseconds, and flat in
-model size.
+Started on static embeddings (model2vec) purely for speed, then measured them:
+on full-corpus retrieval over 418k chunks they collapsed to R@1 = 0.045, and a
+depth-500 probe found the gold chunk for only 39% of queries. The ceiling was
+the encoder, not the ranking on top of it — a static model averages subword
+vectors, so a Tamil transliteration of "CHIPSA" shares nothing with the Latin
+string, and short acronym queries are unmatchable in principle.
 
-The trade is quality: static embeddings lose word order and context. We buy
-most of that back at the retrieval layer instead, with BM25 fusion and a
-lexical-overlap reranker, which together cost far less than a transformer
-forward pass.
+`multilingual-e5-small`, int8-quantised to ONNX, fixes that for +1.3ms per
+query — trivial against a 200ms budget. Measured head-to-head on 155 queries
+per language:
 
-`potion-multilingual-128M` is distilled from a multilingual teacher, so Hindi,
-Bengali and Tamil queries land in the same space as the English passages they
-should match. That is what makes cross-lingual retrieval work without a
-translation hop.
+    Hindi   P@1 0.245 -> 0.394   MRR 0.467 -> 0.576
+    Tamil   P@1 0.232 -> 0.239   MRR 0.441 -> 0.451
+
+Tamil barely benefits; e5's Tamil coverage is genuinely weaker, and the
+per-language numbers are reported rather than averaged away.
+
+E5 is *asymmetric*: it was trained with "query: " and "passage: " prefixes and
+loses substantial accuracy without them, which is why this module never exposes
+an untyped `encode`. Getting the prefix wrong is a silent quality regression,
+so `Kind` makes the caller state which side they are on.
 """
 
 from __future__ import annotations
 
 import threading
+from enum import Enum
 from typing import Sequence
 
 import numpy as np
 
 from .config import Settings, settings
 
-_model = None
+
+class Kind(str, Enum):
+    QUERY = "query: "
+    PASSAGE = "passage: "
+
+
+class OnnxEncoder:
+    """int8 ONNX sentence encoder with mean pooling."""
+
+    def __init__(self, cfg: Settings = settings) -> None:
+        import onnxruntime as ort
+        from huggingface_hub import hf_hub_download
+        from tokenizers import Tokenizer
+
+        model_path = (
+            cfg.local_encoder_path
+            or hf_hub_download(cfg.encoder_model, cfg.encoder_onnx_file)
+        )
+        tok_path = (
+            cfg.local_tokenizer_path
+            or hf_hub_download(cfg.encoder_model, cfg.encoder_tokenizer_file)
+        )
+
+        self.tokenizer = Tokenizer.from_file(tok_path)
+        self.tokenizer.enable_truncation(cfg.encoder_max_tokens)
+
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = cfg.onnx_threads
+        opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        self.session = ort.InferenceSession(
+            model_path, opts, providers=["CPUExecutionProvider"]
+        )
+        self._input_names = {i.name for i in self.session.get_inputs()}
+        self.dim = int(self.session.get_outputs()[0].shape[-1])
+
+    def encode(self, texts: Sequence[str], kind: Kind, batch_size: int = 64) -> np.ndarray:
+        if not texts:
+            return np.zeros((0, self.dim), dtype=np.float32)
+        out = [
+            self._encode_batch(list(texts[i : i + batch_size]), kind)
+            for i in range(0, len(texts), batch_size)
+        ]
+        return np.vstack(out)
+
+    def _encode_batch(self, texts: list[str], kind: Kind) -> np.ndarray:
+        encoded = self.tokenizer.encode_batch([kind.value + t for t in texts])
+        # Pad to the longest sequence in *this* batch rather than the model
+        # maximum: attention is quadratic in length, and MS MARCO chunks are
+        # short, so batch-local padding is several times faster.
+        width = max(len(e.ids) for e in encoded)
+        ids = np.zeros((len(encoded), width), dtype=np.int64)
+        mask = np.zeros((len(encoded), width), dtype=np.int64)
+        for i, e in enumerate(encoded):
+            ids[i, : len(e.ids)] = e.ids
+            mask[i, : len(e.ids)] = e.attention_mask
+
+        feed = {"input_ids": ids, "attention_mask": mask}
+        if "token_type_ids" in self._input_names:
+            feed["token_type_ids"] = np.zeros_like(ids)
+
+        hidden = self.session.run(None, feed)[0]
+        # Mean pooling over non-padding tokens — what e5 was trained with.
+        m = mask[..., None].astype(np.float32)
+        pooled = (hidden * m).sum(axis=1) / np.maximum(m.sum(axis=1), 1e-9)
+        return l2_normalise(pooled.astype(np.float32))
+
+
+_encoder: OnnxEncoder | None = None
 _lock = threading.Lock()
 
 
-def get_model(cfg: Settings = settings):
-    """Process-wide singleton. Loading is slow and the model is read-only.
-
-    Two non-obvious arguments:
-
-    `force_download=False` — model2vec defaults this to *True*, so every call
-    re-fetches the entire ~1GB repo (including a 512MB ONNX export we never
-    use) even when the cache is warm. Left at the default it adds minutes to
-    every cold start and silently re-downloads on a deployed Space.
-
-    `quantize_to` — the released model is float32, and its embedding matrix is
-    ~500k vocab x 256 dims = 512MB, which dominates container memory. int8
-    scalar quantisation cuts that to ~128MB for a negligible retrieval-quality
-    cost, since we L2-normalise immediately afterwards anyway.
-    """
-    global _model
-    if _model is None:
+def get_encoder(cfg: Settings = settings) -> OnnxEncoder:
+    """Process-wide singleton; the ONNX session is thread-safe for inference."""
+    global _encoder
+    if _encoder is None:
         with _lock:
-            if _model is None:
-                from model2vec import StaticModel
-
-                source = cfg.local_model_dir if cfg.local_model_dir else cfg.static_model
-                kwargs = {"force_download": False}
-                if cfg.embed_quantize:
-                    kwargs["quantize_to"] = cfg.embed_quantize
-                _model = StaticModel.from_pretrained(source, **kwargs)
-    return _model
-
-
-def encode(texts: Sequence[str], cfg: Settings = settings) -> np.ndarray:
-    """Encode to L2-normalised float32.
-
-    Normalising here means every downstream similarity is a plain dot product,
-    which is what both usearch's cosine metric and the reranker assume.
-    """
-    model = get_model(cfg)
-    vecs = model.encode(
-        list(texts), batch_size=cfg.embed_batch, show_progress_bar=False
-    ).astype(np.float32)
-    return l2_normalise(vecs)
+            if _encoder is None:
+                _encoder = OnnxEncoder(cfg)
+    return _encoder
 
 
 def l2_normalise(vecs: np.ndarray) -> np.ndarray:
     if vecs.ndim == 1:
         vecs = vecs.reshape(1, -1)
     norms = np.linalg.norm(vecs, axis=1, keepdims=True)
-    # A zero vector means the text tokenised to nothing (punctuation only).
-    # Leave it at zero rather than dividing by zero; it will simply never match.
+    # A zero vector means the text tokenised to nothing; leave it at zero
+    # rather than dividing by zero — it simply never matches.
     np.maximum(norms, 1e-12, out=norms)
     return vecs / norms
 
 
-def encode_one(text: str, cfg: Settings = settings) -> np.ndarray:
-    """Single-query path. Kept separate so the hot path skips list overhead."""
-    return encode([text], cfg)[0]
+def encode_passages(texts: Sequence[str], cfg: Settings = settings) -> np.ndarray:
+    return get_encoder(cfg).encode(texts, Kind.PASSAGE, cfg.embed_batch)
+
+
+def encode_query(text: str, cfg: Settings = settings) -> np.ndarray:
+    return get_encoder(cfg).encode([text], Kind.QUERY, 1)[0]
+
+
+def encode_queries(texts: Sequence[str], cfg: Settings = settings) -> np.ndarray:
+    return get_encoder(cfg).encode(texts, Kind.QUERY, cfg.embed_batch)
 
 
 def dim(cfg: Settings = settings) -> int:
-    return int(get_model(cfg).dim)
+    return get_encoder(cfg).dim

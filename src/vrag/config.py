@@ -26,15 +26,19 @@ class Settings(BaseSettings):
     max_rows_per_lang: int = 12_000
 
     # ---- embeddings --------------------------------------------------------
-    # Tier A: static token embeddings. No transformer forward pass at query
-    # time, which is what makes the sub-200ms budget achievable.
-    static_model: str = "minishlab/potion-multilingual-128M"
-    # Point at a pre-fetched model directory to skip the Hub entirely. The
-    # deployed Space sets this so container boot never depends on the network.
-    local_model_dir: str = ""
-    # int8 shrinks the 512MB embedding matrix to ~128MB. Empty = keep float32.
-    embed_quantize: str = "int8"
-    embed_batch: int = 2048
+    # int8-quantised ONNX export: 118MB on disk, ~1.3ms per query on CPU.
+    # The fp32 export is 470MB and measurably no better for this corpus.
+    encoder_model: str = "intfloat/multilingual-e5-small"
+    encoder_onnx_file: str = "onnx/model_qint8_avx512_vnni.onnx"
+    encoder_tokenizer_file: str = "onnx/tokenizer.json"
+    encoder_max_tokens: int = 512
+    # Set these to ship the model inside the image so container boot never
+    # depends on the Hub being reachable.
+    local_encoder_path: str = ""
+    local_tokenizer_path: str = ""
+    # Free-tier Spaces give 2 vCPU; oversubscribing threads makes it slower.
+    onnx_threads: int = 4
+    embed_batch: int = 64
 
     # ---- retrieval ---------------------------------------------------------
     dense_candidates: int = 60  # ANN top-k before fusion
