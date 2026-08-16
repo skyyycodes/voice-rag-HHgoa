@@ -306,22 +306,58 @@ class PropositionChunker:
     def split(self, text: str, meta: ChunkMeta) -> list[Chunk]:
         out: list[Chunk] = []
         for s_start, s_end, sent in _sentence_spans(text):
-            pieces = self.clause_re.split(sent)
-            cursor = s_start
-            for piece in pieces:
-                piece = piece.strip()
-                if not piece:
-                    continue
-                idx = text.find(piece, cursor)
-                if idx < 0:
-                    idx = cursor
-                n = len(_WORD_SPAN.findall(piece))
-                cursor = idx + len(piece)
+            spans = self._fragment_spans(text, sent, s_start)
+            for start, end in self._merge_short(text, spans):
+                body = text[start:end].strip(" ,;—–")
+                n = len(_WORD_SPAN.findall(body))
                 if n < self.min_tokens or n > self.max_tokens:
                     continue
                 # The full sentence is the context — a bare clause read alone
                 # is exactly the kind of thing that produces a hallucination.
-                out.append(
-                    make_chunk(piece, sent, meta, self.name, idx, idx + len(piece))
-                )
+                out.append(make_chunk(body, sent, meta, self.name, start, end))
         return out
+
+    def _fragment_spans(self, text: str, sent: str, s_start: int) -> list[tuple[int, int]]:
+        """Clause spans as offsets into `text`, so merging stays lossless."""
+        spans: list[tuple[int, int]] = []
+        cursor = s_start
+        for piece in self.clause_re.split(sent):
+            piece = piece.strip()
+            if not piece:
+                continue
+            idx = text.find(piece, cursor)
+            if idx < 0:
+                idx = cursor
+            spans.append((idx, idx + len(piece)))
+            cursor = idx + len(piece)
+        return spans
+
+    def _merge_short(
+        self, text: str, spans: list[tuple[int, int]]
+    ) -> list[tuple[int, int]]:
+        """Absorb undersized fragments into their neighbour.
+
+        Splitting "Marie Curie, who was born in Warsaw" on the relative pronoun
+        strands "Marie Curie" as a 2-token fragment and leaves the next clause
+        subjectless — "was born in Warsaw", which is unusable as a standalone
+        retrieval unit and actively dangerous as a quoted answer. Merging any
+        fragment below `min_tokens` into its neighbour restores the subject.
+        Because fragments are contiguous, the merged span is still a literal
+        substring of the passage, so character offsets stay valid.
+        """
+        if not spans:
+            return []
+        merged: list[list[int]] = [list(spans[0])]
+        for start, end in spans[1:]:
+            prev = merged[-1]
+            if len(_WORD_SPAN.findall(text[prev[0] : prev[1]])) < self.min_tokens:
+                prev[1] = end  # undersized head absorbs the following clause
+            else:
+                merged.append([start, end])
+        # A trailing runt has no successor to merge into; fold it backwards.
+        if len(merged) > 1:
+            last = merged[-1]
+            if len(_WORD_SPAN.findall(text[last[0] : last[1]])) < self.min_tokens:
+                merged[-2][1] = last[1]
+                merged.pop()
+        return [(a, b) for a, b in merged]
