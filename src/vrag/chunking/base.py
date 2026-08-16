@@ -88,7 +88,7 @@ class Chunker(Protocol):
 
     name: str
 
-    def split(self, text: str, meta: "ChunkMeta") -> list[Chunk]: ...
+    def split(self, text: str, meta: ChunkMeta) -> list[Chunk]: ...
 
 
 @dataclass(slots=True)

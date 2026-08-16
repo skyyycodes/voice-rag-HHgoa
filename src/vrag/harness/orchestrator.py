@@ -29,7 +29,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, TypeVar
+from typing import TypeVar
 
 from ..answer.extractive import answer_extractive
 from ..config import Settings, settings
@@ -61,7 +61,7 @@ class Span:
     ok: bool = True
     note: str = ""
 
-    def close(self, ok: bool = True, note: str = "", attempts: int = 1) -> "Span":
+    def close(self, ok: bool = True, note: str = "", attempts: int = 1) -> Span:
         self.ms = (time.perf_counter() - self.started) * 1000
         self.ok = ok
         self.note = note
@@ -325,7 +325,7 @@ class Pipeline:
             return answer
         except CircuitOpen:
             tel.degraded.append("llm_circuit_open")
-        except (asyncio.TimeoutError, TimeoutError):
+        except TimeoutError:
             breaker.record_failure()
             tel.degraded.append("llm_timeout")
         except Exception as exc:

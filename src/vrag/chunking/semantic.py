@@ -11,15 +11,16 @@ distances and should be cut rarely; a passage that lists ten unrelated facts
 has uniformly high ones and should be cut often. A fixed threshold gets both
 cases wrong.
 
-Cost is why this is viable at all: with static embeddings, sentence encoding is
-a hash lookup and an average rather than a transformer forward pass, so
-semantic chunking over the whole corpus stays within the build budget.
+Cost is the reason `prime` exists. Encoding each passage's sentences on its own
+turned a corpus build into tens of thousands of tiny inference calls whose
+per-call overhead dwarfed the work; priming encodes every sentence in the corpus
+in one batched pass instead.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable
 
 import numpy as np
 

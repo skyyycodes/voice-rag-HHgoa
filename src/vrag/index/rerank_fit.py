@@ -77,7 +77,6 @@ def fit(
     diff = pos - neg
     rng = np.random.default_rng(seed)
     w = rng.normal(0, 0.01, size=diff.shape[1])
-    n = len(diff)
 
     for _ in range(epochs):
         margin = diff @ w

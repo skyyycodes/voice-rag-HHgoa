@@ -17,8 +17,9 @@ from __future__ import annotations
 import asyncio
 import random
 import time
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Awaitable, Callable, TypeVar
+from typing import TypeVar
 
 from ..stt.base import STTAuthError, STTBadAudio, STTRateLimited, STTTransient
 

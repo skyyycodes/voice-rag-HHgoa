@@ -26,8 +26,8 @@ so `Kind` makes the caller state which side they are on.
 from __future__ import annotations
 
 import threading
+from collections.abc import Sequence
 from enum import Enum
-from typing import Sequence
 
 import numpy as np
 

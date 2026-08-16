@@ -19,8 +19,6 @@ replies. The LLM path exists for when that matters, behind the same contract.
 
 from __future__ import annotations
 
-import numpy as np
-
 from ..chunking.base import split_sentences
 from ..config import Settings, settings
 from ..harness.contracts import Answer, Citation

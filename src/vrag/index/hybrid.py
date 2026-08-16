@@ -228,7 +228,7 @@ class HybridRetriever:
         np.save(path, self.weights)
 
     @classmethod
-    def load(cls, cfg: Settings = settings) -> "HybridRetriever":
+    def load(cls, cfg: Settings = settings) -> HybridRetriever:
         store = ChunkStore.load(cfg.chunk_store)
         dense = DenseIndex.load(cfg.vector_store, cfg)
         lexical = LexicalIndex.load(cfg.lexical_store)

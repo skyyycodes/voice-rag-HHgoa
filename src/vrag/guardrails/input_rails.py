@@ -30,20 +30,20 @@ _UNSAFE_PATTERNS: list[tuple[str, re.Pattern]] = [
         re.compile(
             r"\b(how\s+(to|do\s+i)\s+(make|build|synthes\w*|construct)\s+"
             r"(a\s+)?(bomb|explosive|nerve\s+agent|sarin|ricin|meth\w*|napalm))",
-            re.I,
+            re.IGNORECASE,
         ),
     ),
     (
         "self_harm",
-        re.compile(r"\b(how\s+to\s+(kill|hurt|harm)\s+(myself|yourself)|commit\s+suicide)\b", re.I),
+        re.compile(r"\b(how\s+to\s+(kill|hurt|harm)\s+(myself|yourself)|commit\s+suicide)\b", re.IGNORECASE),
     ),
     (
         "csam",
-        re.compile(r"\b(child|minor|underage)\s+(porn\w*|sexual|nude)", re.I),
+        re.compile(r"\b(child|minor|underage)\s+(porn\w*|sexual|nude)", re.IGNORECASE),
     ),
     (
         "targeted_violence",
-        re.compile(r"\bhow\s+to\s+(kill|murder|poison)\s+(?!a\s+(mockingbird|process|bug))\w+", re.I),
+        re.compile(r"\bhow\s+to\s+(kill|murder|poison)\s+(?!a\s+(mockingbird|process|bug))\w+", re.IGNORECASE),
     ),
 ]
 
@@ -53,13 +53,13 @@ _UNSAFE_PATTERNS: list[tuple[str, re.Pattern]] = [
 _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("ignore_instructions", re.compile(
         r"\b(ignore|disregard|forget)\s+(all\s+|any\s+|your\s+|the\s+)*"
-        r"(previous|prior|above|earlier|system)\s+(instruction|prompt|rule|direction)", re.I)),
+        r"(previous|prior|above|earlier|system)\s+(instruction|prompt|rule|direction)", re.IGNORECASE)),
     ("role_override", re.compile(
-        r"\b(you\s+are\s+now|act\s+as|pretend\s+to\s+be|from\s+now\s+on\s+you)\b", re.I)),
+        r"\b(you\s+are\s+now|act\s+as|pretend\s+to\s+be|from\s+now\s+on\s+you)\b", re.IGNORECASE)),
     ("prompt_exfiltration", re.compile(
         r"\b(reveal|show|print|repeat|output)\s+(me\s+)?(your\s+)?"
-        r"(system\s+prompt|instructions|initial\s+prompt|rules)\b", re.I)),
-    ("delimiter_injection", re.compile(r"(<\|[a-z_]+\|>|\[/?INST\]|###\s*(system|assistant):)", re.I)),
+        r"(system\s+prompt|instructions|initial\s+prompt|rules)\b", re.IGNORECASE)),
+    ("delimiter_injection", re.compile(r"(<\|[a-z_]+\|>|\[/?INST\]|###\s*(system|assistant):)", re.IGNORECASE)),
 ]
 
 # PII we should not echo back into logs or an answer.

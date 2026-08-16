@@ -28,7 +28,6 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
-import statistics
 import time
 from collections import Counter, defaultdict
 from pathlib import Path

@@ -9,13 +9,13 @@ so a columnar layout is also what the access pattern wants.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
 
 import numpy as np
 import pyarrow as pa
-import pyarrow.ipc as ipc
+from pyarrow import ipc
 
 from ..chunking.base import Chunk
 
@@ -36,7 +36,7 @@ class ChunkStore:
     n_strategies: np.ndarray  # denormalised for the reranker's hot path
 
     @classmethod
-    def from_chunks(cls, chunks: Sequence[Chunk]) -> "ChunkStore":
+    def from_chunks(cls, chunks: Sequence[Chunk]) -> ChunkStore:
         return cls(
             text=[c.text for c in chunks],
             context=[c.context for c in chunks],
@@ -100,7 +100,7 @@ class ChunkStore:
             writer.write_table(ctx_table)
 
     @classmethod
-    def load(cls, path: Path) -> "ChunkStore":
+    def load(cls, path: Path) -> ChunkStore:
         with ipc.open_file(path) as reader:
             table = reader.read_all()
         with ipc.open_file(_context_path(path)) as reader:

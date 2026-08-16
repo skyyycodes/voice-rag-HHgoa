@@ -35,7 +35,7 @@ class DenseIndex:
         self._count = count
 
     @classmethod
-    def build(cls, vectors: np.ndarray, cfg: Settings = settings) -> "DenseIndex":
+    def build(cls, vectors: np.ndarray, cfg: Settings = settings) -> DenseIndex:
         if vectors.dtype != np.float32:
             vectors = vectors.astype(np.float32)
         index = Index(
@@ -72,7 +72,7 @@ class DenseIndex:
         self._index.save(str(path))
 
     @classmethod
-    def load(cls, path: Path, cfg: Settings = settings) -> "DenseIndex":
+    def load(cls, path: Path, cfg: Settings = settings) -> DenseIndex:
         index = Index.restore(str(path), view=False)
         return cls(index, len(index))
 

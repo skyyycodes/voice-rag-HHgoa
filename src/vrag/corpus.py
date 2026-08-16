@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import hashlib
 import unicodedata
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterator
 
 import pyarrow.parquet as pq
 

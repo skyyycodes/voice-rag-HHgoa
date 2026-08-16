@@ -17,8 +17,8 @@ which collapses most inflected forms of a stem onto a shared term.
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Sequence
 
 import bm25s
 import numpy as np
@@ -83,7 +83,7 @@ class LexicalIndex:
         self._vocab = vocab
 
     @classmethod
-    def build(cls, texts: Sequence[str]) -> "LexicalIndex":
+    def build(cls, texts: Sequence[str]) -> LexicalIndex:
         corpus = [tokenize(t) for t in texts]
         vocab: dict[str, int] = {}
         ids: list[list[int]] = []
@@ -127,7 +127,7 @@ class LexicalIndex:
         np.save(path / "vocab_vals.npy", np.array(list(self._vocab.values()), dtype=np.int64))
 
     @classmethod
-    def load(cls, path: Path) -> "LexicalIndex":
+    def load(cls, path: Path) -> LexicalIndex:
         retriever = bm25s.BM25.load(str(path))
         keys = np.load(path / "vocab_keys.npy", allow_pickle=True)
         vals = np.load(path / "vocab_vals.npy")

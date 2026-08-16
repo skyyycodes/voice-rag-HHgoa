@@ -25,7 +25,7 @@ Three things make it safe to put an LLM behind a grounding guarantee:
 from __future__ import annotations
 
 import asyncio
-from typing import Sequence
+from collections.abc import Sequence
 
 from pydantic import BaseModel, Field
 
@@ -161,4 +161,4 @@ def is_configured(cfg: Settings = settings) -> bool:
     return bool(cfg.anthropic_api_key or os.environ.get("ANTHROPIC_API_KEY"))
 
 
-__all__ = ["LLMAnswerer", "LLMAnswer", "is_configured", "asyncio"]
+__all__ = ["LLMAnswer", "LLMAnswerer", "asyncio", "is_configured"]

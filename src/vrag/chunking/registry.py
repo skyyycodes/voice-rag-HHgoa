@@ -18,13 +18,13 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
-from dataclasses import dataclass
-from typing import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 
 import numpy as np
 
 from ..corpus import Passage
-from .base import Chunk, ChunkMeta, content_hash
+from .base import Chunk, ChunkMeta
 from .semantic import SemanticChunker
 from .strategies import (
     FixedTokenChunker,
@@ -74,6 +74,7 @@ class ChunkStats:
     survived: Counter
     total_chunks: int
     total_passages: int
+    errors: Counter = field(default_factory=Counter)
 
     def report(self) -> str:
         lines = [
@@ -94,6 +95,8 @@ class ChunkStats:
             f"\n{self.total_passages:,} passages -> {self.total_chunks:,} chunks "
             f"({self.total_chunks / max(1, self.total_passages):.1f} per passage)"
         )
+        if self.errors:
+            lines.append(f"chunker errors: {dict(self.errors)}")
         return "\n".join(lines)
 
 
@@ -115,6 +118,7 @@ def chunk_passages(
 
     produced: Counter = Counter()
     survived: Counter = Counter()
+    errors: Counter = Counter()
     by_key: dict[str, Chunk] = {}
 
     for passage in passages:
@@ -128,7 +132,10 @@ def chunk_passages(
             try:
                 chunks = chunker.split(passage.text, meta)
             except Exception:
-                # A malformed passage must never abort a corpus-wide build.
+                # A malformed passage must never abort a corpus-wide build, but
+                # silently swallowing it would hide a systematic chunker bug, so
+                # failures are counted and surfaced in the build report.
+                errors[chunker.name] += 1
                 continue
             produced[chunker.name] += len(chunks)
             for chunk in chunks:
@@ -153,6 +160,7 @@ def chunk_passages(
         survived=survived,
         total_chunks=len(chunks),
         total_passages=len(passages),
+        errors=errors,
     )
     return chunks, stats
 
