@@ -113,7 +113,10 @@ class LexicalIndex:
 
         query_obj = bm25s.tokenization.Tokenized(ids=[tokens], vocab=self._vocab)
         idx, scores = self._retriever.retrieve(
-            query_obj, k=min(k, self._retriever.scores["num_docs"])
+            query_obj,
+            k=min(k, self._retriever.scores["num_docs"]),
+            show_progress=False,
+            n_threads=1,  # per-query thread pool setup costs more than it saves
         )
         return idx[0].astype(np.int64), scores[0].astype(np.float32)
 
