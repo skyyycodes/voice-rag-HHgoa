@@ -32,14 +32,31 @@ _lock = threading.Lock()
 
 
 def get_model(cfg: Settings = settings):
-    """Process-wide singleton. Loading is slow and the model is read-only."""
+    """Process-wide singleton. Loading is slow and the model is read-only.
+
+    Two non-obvious arguments:
+
+    `force_download=False` — model2vec defaults this to *True*, so every call
+    re-fetches the entire ~1GB repo (including a 512MB ONNX export we never
+    use) even when the cache is warm. Left at the default it adds minutes to
+    every cold start and silently re-downloads on a deployed Space.
+
+    `quantize_to` — the released model is float32, and its embedding matrix is
+    ~500k vocab x 256 dims = 512MB, which dominates container memory. int8
+    scalar quantisation cuts that to ~128MB for a negligible retrieval-quality
+    cost, since we L2-normalise immediately afterwards anyway.
+    """
     global _model
     if _model is None:
         with _lock:
             if _model is None:
                 from model2vec import StaticModel
 
-                _model = StaticModel.from_pretrained(cfg.static_model)
+                source = cfg.local_model_dir if cfg.local_model_dir else cfg.static_model
+                kwargs = {"force_download": False}
+                if cfg.embed_quantize:
+                    kwargs["quantize_to"] = cfg.embed_quantize
+                _model = StaticModel.from_pretrained(source, **kwargs)
     return _model
 
 

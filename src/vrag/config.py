@@ -29,6 +29,11 @@ class Settings(BaseSettings):
     # Tier A: static token embeddings. No transformer forward pass at query
     # time, which is what makes the sub-200ms budget achievable.
     static_model: str = "minishlab/potion-multilingual-128M"
+    # Point at a pre-fetched model directory to skip the Hub entirely. The
+    # deployed Space sets this so container boot never depends on the network.
+    local_model_dir: str = ""
+    # int8 shrinks the 512MB embedding matrix to ~128MB. Empty = keep float32.
+    embed_quantize: str = "int8"
     embed_batch: int = 2048
 
     # ---- retrieval ---------------------------------------------------------
