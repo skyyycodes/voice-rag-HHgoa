@@ -9,7 +9,9 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     HF_HOME=/app/.cache/huggingface \
-    # Free Spaces give 2 vCPU; more ONNX threads than cores is slower, not faster.
+    # Free Spaces give 2 vCPU; more ONNX threads than cores is slower, not
+    # faster. The reranker times itself at startup and picks its depth from the
+    # measured cost, so the 200ms budget holds here without retuning.
     VRAG_ONNX_THREADS=2 \
     PORT=7860
 
@@ -19,13 +21,17 @@ COPY --chown=app:app src ./src
 RUN pip install --no-cache-dir . && \
     mkdir -p /app/.cache/huggingface && chown -R app:app /app/.cache
 
-# Bake the encoder into the image so container boot never depends on the Hub
-# being reachable — a cold Space that has to download 118MB before serving its
-# first request is the difference between a working demo link and a timeout.
+# Bake BOTH models into the image so container boot never depends on the Hub
+# being reachable. A cold Space downloading ~240MB before its first response is
+# the difference between a working demo link and a timeout — and the retrieval
+# quality claims depend on the cross-encoder actually being present, not
+# silently skipped by the "reranking is optional" fallback.
 RUN python -c "\
-from huggingface_hub import hf_hub_download; \
-[hf_hub_download('intfloat/multilingual-e5-small', f) for f in \
- ('onnx/model_qint8_avx512_vnni.onnx','onnx/tokenizer.json','onnx/config.json')]" && \
+from huggingface_hub import hf_hub_download as d; \
+[d('intfloat/multilingual-e5-small', f) for f in \
+ ('onnx/model_qint8_avx512_vnni.onnx','onnx/tokenizer.json','onnx/config.json')]; \
+[d('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1', f) for f in \
+ ('onnx/model_qint8_avx512_vnni.onnx','tokenizer.json')]" && \
     chown -R app:app /app/.cache
 
 # The prebuilt index. ~300MB of vectors + BM25 + chunk store; copied last so
