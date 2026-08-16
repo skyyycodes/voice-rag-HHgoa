@@ -83,9 +83,15 @@ async def run_bench(n: int, mode: str, warmup: int) -> dict:
     answered_with_gold = 0
     scored = 0
 
-    wall_start = time.perf_counter()
+    # Accumulate only the time spent inside `pipeline.run`. The scoring block
+    # below re-runs retrieval to measure ranking independently of what
+    # generation cited; wrapping a single timer around the whole loop would
+    # fold that extra work into the reported throughput and understate it.
+    served_s = 0.0
     for q in sample:
+        t0 = time.perf_counter()
         response = await pipeline.run(QueryRequest(text=q["query"], answer_mode=mode))
+        served_s += time.perf_counter() - t0
 
         e2e.append(response.total_ms)
         pipe.append(response.pipeline_ms)
@@ -112,7 +118,6 @@ async def run_bench(n: int, mode: str, warmup: int) -> dict:
             if response.decision == Decision.ANSWER and set(ranked) & gold:
                 answered_with_gold += 1
 
-    wall = time.perf_counter() - wall_start
     scored = scored or 1
 
     return {
@@ -128,7 +133,7 @@ async def run_bench(n: int, mode: str, warmup: int) -> dict:
         "latency_end_to_end_ms": percentiles(e2e),
         "latency_by_stage_ms": {k: percentiles(v) for k, v in sorted(stages.items())},
         "latency_by_language_ms": {k: percentiles(v) for k, v in sorted(by_lang.items())},
-        "throughput_qps": round(len(sample) / wall, 1),
+        "throughput_qps": round(len(sample) / served_s, 1) if served_s else 0.0,
         "budget": {
             "target_ms": cfg.budget_total_ms,
             "within_budget_pct": round(

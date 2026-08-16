@@ -110,7 +110,7 @@ def main() -> None:
 
     rows = []
     for mode, label in [
-        ("dense", "dense only (static ANN)"),
+        ("dense", "dense only (ANN)"),
         ("bm25", "BM25 only"),
         ("rrf", "hybrid + RRF fusion"),
         ("full", "hybrid + RRF + learned rerank"),

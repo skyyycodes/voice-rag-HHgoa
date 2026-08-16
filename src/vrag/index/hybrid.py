@@ -1,21 +1,20 @@
 """Hybrid retrieval: dense recall + lexical recall, fused, then reranked.
 
-Measured on MSMARCO-XI, the static embedder alone gets P@1 = 0.245 picking
-among ten hard candidates. That is well above random (0.10) but nowhere near
-good enough to answer from, which is the entire justification for this layer.
+Dense retrieval alone is not good enough to answer from on this corpus, which
+is the entire justification for this layer. `vrag.eval_retrieval` ablates each
+stage against the others so the claim is measured rather than asserted.
 
 Three stages:
 
 1. *Recall* — dense ANN and BM25 run independently over the full index. They
    fail on different queries: dense handles paraphrase and cross-script
-   matching, BM25 handles rare entities and numbers that pooled static vectors
-   wash out.
+   matching, BM25 handles the rare entities and numbers that a pooled vector
+   washes out.
 
 2. *Fusion* — Reciprocal Rank Fusion. RRF combines by rank, not score, which
    matters enormously here: dense cosine magnitudes are not comparable across
-   language pairs (a Hindi-English pair scores systematically lower than an
-   English-English one), so any score-level blend would silently down-weight
-   cross-lingual hits. Ranks are immune to that.
+   language pairs, so any score-level blend would silently down-weight every
+   cross-lingual hit. Ranks are immune to that.
 
 3. *Rerank* — a linear model over cheap features, with all score features
    z-scored *within the candidate set*. That normalisation is what makes a
