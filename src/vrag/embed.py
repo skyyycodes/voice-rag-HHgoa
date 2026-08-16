@@ -58,6 +58,8 @@ class OnnxEncoder:
 
         self.tokenizer = Tokenizer.from_file(tok_path)
         self.tokenizer.enable_truncation(cfg.encoder_max_tokens)
+        self.max_tokens = cfg.encoder_max_tokens
+        self.token_budget = cfg.encoder_token_budget
 
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = cfg.onnx_threads
@@ -69,45 +71,65 @@ class OnnxEncoder:
         self.dim = int(self.session.get_outputs()[0].shape[-1])
 
     def encode(self, texts: Sequence[str], kind: Kind, batch_size: int = 64) -> np.ndarray:
-        """Encode a batch, sorting by length first.
+        """Encode in token-budgeted, length-sorted batches.
 
-        Every sequence in a batch is padded to the longest member, and
-        attention is quadratic in that padded length. With chunks arriving in
-        corpus order, one 400-token chunk drags 63 short ones up to its length
-        and most of the compute is spent on padding. Sorting by length groups
-        similar sizes together, then the original order is restored — on this
-        corpus that is the difference between a ~50-minute index build and a
-        few minutes.
+        Two things about transformer batching drive this, and getting either
+        wrong is expensive:
 
-        Only worth the bookkeeping in bulk; a single query skips it.
+        *Padding is the dominant cost.* Every sequence in a batch is padded to
+        the longest member, so with texts in corpus order one long chunk drags
+        63 short ones up to its length. Sorting by token count first groups
+        similar lengths together.
+
+        *A fixed row count is the wrong unit.* Work and peak memory scale with
+        `rows x padded_length`, not rows. A batch of 64 Tamil sentences padded
+        to 512 tokens allocates activations two orders of magnitude larger than
+        64 short English ones — which is what made the index build both slow
+        and multi-gigabyte. Batching to a fixed *token* budget keeps every batch
+        the same size in the units that matter: many rows when they are short,
+        few when they are long.
+
+        Tokenisation happens once here rather than per batch, so the sort has
+        exact lengths to work with instead of a character-count proxy.
         """
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        if len(texts) <= batch_size:
-            return self._encode_batch(list(texts), kind)
 
-        order = sorted(range(len(texts)), key=lambda i: len(texts[i]))
-        sorted_texts = [texts[i] for i in order]
+        encoded = self.tokenizer.encode_batch([kind.value + t for t in texts])
+        if len(texts) == 1:
+            return self._run([encoded[0]])
 
-        encoded = np.vstack(
-            [
-                self._encode_batch(sorted_texts[i : i + batch_size], kind)
-                for i in range(0, len(sorted_texts), batch_size)
-            ]
-        )
+        order = sorted(range(len(encoded)), key=lambda i: len(encoded[i].ids))
+
+        # `batch_size` stays the row ceiling so short-text batches don't grow
+        # unboundedly; the token budget is what binds on long text.
+        budget = max(self.token_budget, self.max_tokens)
+        out_rows: list[np.ndarray] = []
+        batch: list = []
+        widest = 0
+        for i in order:
+            item = encoded[i]
+            width = max(widest, len(item.ids))
+            if batch and ((len(batch) + 1) * width > budget or len(batch) >= batch_size):
+                out_rows.append(self._run(batch))
+                batch, widest = [], 0
+                width = len(item.ids)
+            batch.append(item)
+            widest = width
+        if batch:
+            out_rows.append(self._run(batch))
+
+        stacked = np.vstack(out_rows)
 
         # Scatter back so row i corresponds to texts[i]; callers index these
         # rows against the chunk store, so a permuted result would silently
         # attach every vector to the wrong chunk.
-        out = np.empty_like(encoded)
-        out[np.asarray(order)] = encoded
-        return out
+        result = np.empty_like(stacked)
+        result[np.asarray(order)] = stacked
+        return result
 
-    def _encode_batch(self, texts: list[str], kind: Kind) -> np.ndarray:
-        encoded = self.tokenizer.encode_batch([kind.value + t for t in texts])
-        # Pad to the longest sequence in *this* batch rather than the model
-        # maximum: attention is quadratic in length, and MS MARCO chunks are
-        # short, so batch-local padding is several times faster.
+    def _run(self, encoded: list) -> np.ndarray:
+        """Run one already-tokenised batch, padded to its own longest member."""
         width = max(len(e.ids) for e in encoded)
         ids = np.zeros((len(encoded), width), dtype=np.int64)
         mask = np.zeros((len(encoded), width), dtype=np.int64)

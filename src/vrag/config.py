@@ -44,13 +44,19 @@ class Settings(BaseSettings):
     encoder_onnx_file: str = "onnx/model_qint8_avx512_vnni.onnx"
     encoder_tokenizer_file: str = "onnx/tokenizer.json"
     encoder_max_tokens: int = 512
+    # Max padded tokens (rows x width) per inference batch. Work and peak
+    # memory scale with this product, not with row count — batching by rows
+    # alone made Indic batches, which tokenise far longer than English, both
+    # slow and multi-gigabyte.
+    encoder_token_budget: int = 8192
     # Set these to ship the model inside the image so container boot never
     # depends on the Hub being reachable.
     local_encoder_path: str = ""
     local_tokenizer_path: str = ""
     # Free-tier Spaces give 2 vCPU; oversubscribing threads makes it slower.
     onnx_threads: int = 4
-    embed_batch: int = 64
+    # Row ceiling; the token budget above is what actually binds on long text.
+    embed_batch: int = 256
 
     # ---- retrieval ---------------------------------------------------------
     dense_candidates: int = 60  # ANN top-k before fusion
