@@ -67,10 +67,14 @@ def default_chunkers(encode: Callable[[list[str]], np.ndarray] | None = None) ->
     testable) without loading an embedding model.
     """
     chunkers: list = [
-        FixedTokenChunker(size=120, overlap=30),
-        RecursiveChunker(max_tokens=140),
-        SentenceWindowChunker(window=1),
-        ParentChildChunker(parent_tokens=200, child_tokens=45),
+        # Sizes come from each strategy's own defaults, which are set from the
+        # measured corpus distribution (see the sizing note above). Repeating
+        # them here previously overrode that tuning silently — the dataclass
+        # defaults were correct and these literals shadowed them.
+        FixedTokenChunker(),
+        RecursiveChunker(),
+        SentenceWindowChunker(),
+        ParentChildChunker(),
         MetadataAwareChunker(),
         PropositionChunker(),
     ]

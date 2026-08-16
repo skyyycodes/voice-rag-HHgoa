@@ -100,7 +100,7 @@ class RecursiveChunker:
     """
 
     max_tokens: int = 45
-    min_tokens: int = 12
+    min_tokens: int = 10
     name: str = "recursive"
     separators: tuple[str, ...] = ("\n\n", "\n", "। ", "॥ ", ". ", "? ", "! ", "; ", ", ", " ")
 
