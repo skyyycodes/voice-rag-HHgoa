@@ -332,7 +332,7 @@ their English sources). Warm-up runs excluded. Raw JSON in
 ### Latency — the 200ms target
 
 ```
-P50   94.82 ms     P70   99.35 ms     P95  101.14 ms     P100  130.45 ms
+P50   95.66 ms     P70  100.01 ms     P95  102.63 ms     P100  115.54 ms
 within 200ms budget: 100.0% of queries      10.6 queries/sec, single process
 ```
 

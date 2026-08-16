@@ -288,3 +288,30 @@ def test_chunk_token_counts_are_word_counts_not_fragments():
 )
 def test_personal_scope_rail_is_narrow(query, allowed):
     assert check_input(query).allowed is allowed
+
+
+# --- guardrail probe contract ---------------------------------------------
+def test_probe_expectations_are_machine_checkable():
+    """Every probe's `expect` must be assertable without parsing prose.
+
+    The panel is the demo's evidence that guardrails are calibrated rather than
+    trigger-happy, so a probe whose expectation cannot be checked automatically
+    is a claim nobody verifies. Prose belongs in `note`.
+    """
+    from vrag.harness.contracts import Decision
+
+    import asyncio as _asyncio
+
+    from vrag.server import probes as probes_ep
+
+    payload = _asyncio.run(probes_ep())
+    valid = {d.value for d in Decision} | {"declines"}
+    assert payload["probes"], "probe list must not be empty"
+    for p in payload["probes"]:
+        assert p["expect"] in valid, f"{p['label']}: {p['expect']!r} is not checkable"
+
+    # The panel must contain both refusals and allowed queries — one that only
+    # shows refusals proves nothing about the false-positive rate.
+    outcomes = {p["expect"] for p in payload["probes"]}
+    assert "answer" in outcomes, "probes must include queries that should be answered"
+    assert outcomes - {"answer"}, "probes must include queries that should be refused"

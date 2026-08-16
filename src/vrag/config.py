@@ -143,7 +143,7 @@ class Settings(BaseSettings):
     # in-domain vs out-of-domain populations it catches real out-of-domain
     # traffic where the margin heuristic caught 0%. Set by
     # `vrag.calibrate_guardrails`.
-    ood_rerank_floor: float = -4.0  # 4.8% false-decline, 50% out-of-domain catch
+    ood_rerank_floor: float = -3.2  # 5.5% false-decline, 64.3% out-of-domain catch
     # Minimum lexical+semantic overlap between answer and cited chunk.
     grounding_floor: float = 0.45
     # Cosine below which a cross-lingual span counts as unrelated. e5
