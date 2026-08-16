@@ -382,12 +382,32 @@ actually constrains.
 | **hybrid + RRF + cross-encoder cascade** | **0.158** | **0.261** | **0.200** | 95.6 ms |
 
 Read the third row before the fourth. **Rank fusion alone is worse than dense
-retrieval alone** — MRR 0.109 against 0.170. Adding BM25 by rank actively hurts
-on this corpus, because BM25 is the weakest retriever here (MRR 0.106) and RRF
-weights it equally. The system is not saved by its fusion; it is saved by the
-cross-encoder, which lifts MRR **+83%** over the fusion it reranks.
+retrieval alone** — MRR 0.109 against 0.170. The system is not saved by its
+fusion; it is saved by the cross-encoder, which lifts MRR **+83%** over the
+fusion it reranks.
 
 That is an uncomfortable table to publish and it is the accurate one.
+
+**But do not conclude that BM25 should be down-weighted.** That was the obvious
+next move, and measuring it says otherwise:
+
+| w_dense / w_bm25 | R@1 | R@5 | MRR |
+|---|---:|---:|---:|
+| **1.0 / 1.0 (shipped)** | **0.158** | 0.261 | **0.200** |
+| 1.0 / 0.5 | 0.121 | 0.297 | 0.182 |
+| 1.0 / 0.25 | 0.115 | 0.303 | 0.183 |
+| 1.0 / 0.0 (dense only) | 0.127 | 0.303 | 0.192 |
+| 0.0 / 1.0 (BM25 only) | 0.133 | 0.200 | 0.162 |
+
+Equal weighting is already the best setting for R@1 and MRR. The third row of
+the ablation measures fusion *without* a cross-encoder downstream, and that
+changes what the fusion is for. Ranking final results and generating candidates
+for a reranker are different jobs: BM25 is a poor ranker here, but it surfaces
+exact-term matches that dense retrieval misses, and those are disproportionately
+the exactly-right passage. Its value is conditional on what comes after it.
+
+A component that looks harmful in isolation can be load-bearing in place. That
+is the argument for ablating the *pipeline*, not the parts.
 
 Full stack beats dense-only by **+21.1% MRR**. One thing the table says that a
 summary would hide: **RRF fusion alone is worse on R@5 than dense alone** —
