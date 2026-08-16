@@ -70,10 +70,23 @@ _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("phone_in", re.compile(r"\b(?:\+91[\s-]?)?[6-9]\d{9}\b")),
 ]
 
-# Characters that carry no linguistic content but do carry attack payloads:
-# zero-width joiners used to smuggle text past filters, and bidi overrides used
-# to make a string render differently from how it is processed.
-_INVISIBLE = re.compile(r"[​-‏‪-‮⁦-⁩﻿]")
+# Invisible characters split into two classes, because a blanket strip is wrong
+# for this corpus.
+#
+# These carry no linguistic content in any script — zero-width space, BOM, and
+# the bidi overrides used to make a string render differently from how it is
+# processed. Replaced with a *space* rather than deleted: an attacker separating
+# words with U+200B produces "ignore​all​previous", and deleting the
+# separators yields "ignoreallprevious", which matches nothing. Substituting a
+# space restores the word boundaries the patterns key on.
+_INVISIBLE_TO_SPACE = re.compile(r"[​  ﻿‪-‮⁦-⁩]")
+
+# ZWJ and ZWNJ are different: they are *linguistically load-bearing* in
+# Devanagari, Bengali and Tamil, where they control conjunct formation. Deleting
+# them globally would corrupt legitimate Indic queries — which is most of this
+# corpus. They are only removed between two ASCII letters, a position where they
+# have no valid role and can only be filter evasion.
+_ZW_JOINER_IN_LATIN = re.compile(r"(?<=[A-Za-z])[‌‍]+(?=[A-Za-z])")
 
 
 def normalise(text: str) -> str:
@@ -84,7 +97,8 @@ def normalise(text: str) -> str:
     reads identically to a human and tokenises close enough for a model.
     """
     text = unicodedata.normalize("NFKC", text)
-    text = _INVISIBLE.sub("", text)
+    text = _ZW_JOINER_IN_LATIN.sub("", text)
+    text = _INVISIBLE_TO_SPACE.sub(" ", text)
     return " ".join(text.split())
 
 

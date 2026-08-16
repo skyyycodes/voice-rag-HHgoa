@@ -16,11 +16,17 @@ from typing import Protocol
 
 # Sentence terminators across the scripts present in MSMARCO-XI.
 _TERMINATORS = "।॥؟۔?!."
-# Split after a terminator + whitespace, but not when the period sits between
-# digits (3.5), nor after a single capital letter (U.S.A.), nor after common
-# abbreviations.
+# Split after a terminator followed by whitespace, but not after a single
+# capital letter (U.S.A.) or a common abbreviation.
+#
+# There is deliberately no decimal guard here. Requiring whitespace after the
+# terminator already protects "3.5" — the period in a decimal is never followed
+# by a space. An explicit `(?<!\d[.])` guard looks like it protects decimals but
+# actually blocks every sentence ending in a number, so "...founded in 1867. She
+# won..." silently stopped splitting. MS MARCO is full of NUMERIC passages, so
+# that failure was both common and invisible.
 _ABBREV = r"(?<!\b[A-Z])(?<!\bMr)(?<!\bMrs)(?<!\bDr)(?<!\bSt)(?<!\bNo)(?<!\bvs)(?<!\bInc)(?<!\bJr)"
-_SENT_SPLIT = re.compile(rf"(?<=[{_TERMINATORS}])(?<!\d[.])" + _ABBREV + r"\s+")
+_SENT_SPLIT = re.compile(rf"(?<=[{_TERMINATORS}])" + _ABBREV + r"\s+")
 
 _WORD = re.compile(r"\w+", re.UNICODE)
 
