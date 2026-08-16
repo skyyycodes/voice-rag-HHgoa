@@ -315,3 +315,51 @@ def test_probe_expectations_are_machine_checkable():
     outcomes = {p["expect"] for p in payload["probes"]}
     assert "answer" in outcomes, "probes must include queries that should be answered"
     assert outcomes - {"answer"}, "probes must include queries that should be refused"
+
+
+def test_chitchat_rail_blocks_greetings_without_declining_real_queries():
+    """Greetings must not be answered from lexically-overlapping passages.
+
+    Regression for a false positive found on the deployed Space: "Hello, what
+    is up?" was answered with grounding 1.00 from a passage beginning "Hello
+    there, When user logs in to Citrix web Interface", and "Hey hey hey, what's
+    up" from "...shows up on the balance sheet". The relevance floor cannot
+    catch these — the passages really do contain the words.
+
+    The second half of this test is the one that matters. A rail that blocks
+    greetings by also blocking real questions has not fixed anything.
+    """
+    import json
+    from pathlib import Path
+
+    from vrag.guardrails.input_rails import check_input
+
+    # These reach the chitchat rail. (Very short greetings — "hi", "hey" — are
+    # refused earlier by the min-length rail, so asserting `chitchat` on them
+    # would test rail ordering rather than the rail itself.)
+    greetings = [
+        "hello", "Hello, what is up?", "Hey, how are you?",
+        "Hey hey hey, what's up, what's up, what's up", "good morning",
+        "namaste", "नमस्ते", "thank you",
+    ]
+    for text in greetings:
+        verdict = check_input(text)
+        assert not verdict.allowed, f"greeting was allowed through: {text!r}"
+        assert "chitchat" in verdict.triggered, f"{text!r} -> {verdict.triggered}"
+
+    for text in ("hi", "hey", "yo"):
+        assert not check_input(text).allowed, f"greeting was allowed through: {text!r}"
+
+    # Content words must survive, including ones that embed greeting tokens.
+    answerable = [
+        "what is a hello world program", "how are you supposed to file taxes",
+        "what is the morning after pill", "what does ok stand for",
+        "what is a corporation", "कॉर्पोरेशन क्या है?",
+    ]
+    for text in answerable:
+        assert check_input(text).allowed, f"real query was declined: {text!r}"
+
+    # And it must cost nothing against the held-out set the numbers come from.
+    queries = json.loads(Path("data/index/eval_queries.json").read_text())
+    blocked = [q["query"] for q in queries if "chitchat" in check_input(q["query"]).triggered]
+    assert not blocked, f"chitchat rail declined real held-out queries: {blocked[:3]}"

@@ -83,6 +83,47 @@ _PERSONAL_SCOPE: list[tuple[str, re.Pattern]] = [
         r"manager|calendar|current\s+location)\b", re.IGNORECASE)),
 ]
 
+# Conversational openers are a distinct class of input, not a retrieval failure.
+#
+# Found by testing the deployed Space: "Hello, what is up?" was ANSWERED with
+# grounding 1.00, citing a passage that begins "Hello there, When user logs in
+# to Citrix web Interface" — and "Hey hey hey, what's up" was answered from
+# "...that's when it shows up on the balance sheet."
+#
+# No score threshold fixes that. BM25 matches the literal tokens, the passages
+# genuinely contain them, and the cross-encoder rates the surface overlap
+# highly, so the relevance floor never fires. Raising the floor high enough to
+# catch these would decline real questions instead.
+#
+# The rule is all-or-nothing on purpose: *every* token must be conversational
+# filler. "what is a hello world program" and "how are you supposed to file
+# taxes" both pass, because they carry content words this set does not contain.
+# Same character class as the lexical tokeniser — a bare `\w+` would shred
+# Indic greetings into consonant fragments and match nothing.
+_CHITCHAT_TOKEN = re.compile(r"[\wऀ-෿̀-ͯ]+", re.UNICODE)
+_CHITCHAT_WORDS = frozenset(
+    """
+    hi hii hiii hello helo hey heyy heya yo yoo hiya howdy sup wassup whatsup
+    hola greetings namaste namaskar salaam
+    good great nice fine cool ok okay okey yes no
+    morning afternoon evening night
+    how are you u ur is it going doing r s m
+    what whats up there
+    thanks thank thankyou thx ty please welcome a lot much
+    bye goodbye cya later
+    mate bro dude buddy friend sir maam madam
+    नमस्ते नमस्कार हाय हैलो कैसे हो आप क्या हाल है
+    নমস্কার হাই কেমন আছেন আছো তুমি আপনি
+    வணக்கம் ஹாய் எப்படி இருக்கிறீர்கள்
+    """.split()
+)
+
+
+def _is_chitchat(cleaned: str) -> bool:
+    tokens = _CHITCHAT_TOKEN.findall(cleaned.lower())
+    return bool(tokens) and all(token in _CHITCHAT_WORDS for token in tokens)
+
+
 # PII we should not echo back into logs or an answer.
 _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("credit_card", re.compile(r"\b(?:\d[ -]*?){13,16}\b")),
@@ -163,6 +204,18 @@ def check_input(text: str, cfg: Settings = settings) -> GuardVerdict:
                 reason="The query contains instruction-injection patterns.",
                 triggered=[name],
             )
+
+    if _is_chitchat(cleaned):
+        return GuardVerdict(
+            allowed=False,
+            decision=Decision.REJECT_OFF_TOPIC,
+            reason=(
+                "That is a greeting rather than a question. This system answers "
+                "only from an indexed passage corpus — ask it something those "
+                "passages could contain."
+            ),
+            triggered=["chitchat"],
+        )
 
     for name, pattern in _PERSONAL_SCOPE:
         if pattern.search(cleaned):

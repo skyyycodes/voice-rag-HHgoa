@@ -16,6 +16,7 @@ import asyncio
 import html
 import json
 import sys
+import threading
 from pathlib import Path
 
 ROOT = Path(__file__).parent
@@ -37,7 +38,30 @@ RETRIEVER = HybridRetriever.load(settings)
 TRANSCRIBERS = build_transcribers(settings)
 PIPELINE = Pipeline(RETRIEVER, transcribers=TRANSCRIBERS, cfg=settings)
 MANIFEST = json.loads(settings.manifest.read_text()) if settings.manifest.exists() else {}
-asyncio.run(PIPELINE.run(QueryRequest(text="warm up the pipeline")))
+
+# ---------------------------------------------------------------------------
+# One long-lived event loop, owned by a daemon thread.
+#
+# `asyncio.run` per request is the obvious thing and it is wrong here: it closes
+# the loop it created. The Sarvam transcriber's httpx client binds its
+# connection pool to whichever loop first drives it, so the *first* recording
+# succeeded and every one after it died with `RuntimeError: Event loop is
+# closed`. Text queries never touch httpx, which is why local testing — and the
+# startup warm-up below — sailed straight past it.
+#
+# Gradio calls these handlers from its worker threads, so the work is submitted
+# across threads rather than awaited. That also keeps the ~100ms of ONNX compute
+# off Gradio's own loop.
+# ---------------------------------------------------------------------------
+_LOOP = asyncio.new_event_loop()
+threading.Thread(target=_LOOP.run_forever, name="vrag-loop", daemon=True).start()
+
+
+def _run(request: QueryRequest):
+    return asyncio.run_coroutine_threadsafe(PIPELINE.run(request), _LOOP).result()
+
+
+_run(QueryRequest(text="warm up the pipeline"))
 
 # ---------------------------------------------------------------------------
 # ZeroGPU compatibility.
@@ -78,10 +102,6 @@ DECISION_COLOUR = {
     "reject_malformed": "#c62828",
     "error": "#c62828",
 }
-
-
-def _run(request: QueryRequest):
-    return asyncio.run(PIPELINE.run(request))
 
 
 def _verdict_html(r) -> str:
@@ -232,8 +252,11 @@ PROBES = [
     ("Personal / unknowable", "what did I have for breakfast this morning"),
     ("Out of corpus", "what did the 2024 Paris Olympics opening ceremony feature"),
     ("Nonsense", "blorptang fizzlewick quixotry"),
-    ("Personal phrasing, answerable", "how much water should I drink a day"),
-    ("Personal phrasing, answerable", "what is my credit score based on"),
+    # Both say "I"/"my" and both are answerable from the corpus. They are the
+    # counterexamples to the "Personal / unknowable" probe above: the rail keys
+    # on whether the corpus can answer, not on first-person phrasing.
+    ("Says “I” — answered", "how much water should I drink a day"),
+    ("Says “my” — answered", "what is my credit score based on"),
 ]
 
 CSS = """

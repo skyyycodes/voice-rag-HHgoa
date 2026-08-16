@@ -269,6 +269,19 @@ structural validation, a narrow unsafe-content list, prompt-injection patterns,
 and PII flagging. Injection is *refused*, not stripped: sanitising and
 proceeding means guessing which part of the input was the real question.
 
+A **chit-chat rail** was added after deployment testing, not before it. On the
+live Space, *"Hello, what is up?"* was answered with grounding 1.00 from a
+passage beginning *"Hello there, When user logs in to Citrix web Interface"*,
+and *"Hey hey hey, what's up"* from *"…that's when it shows up on the balance
+sheet."* No relevance threshold catches those — the passages really do contain
+the words, BM25 matches them, and the cross-encoder scores the overlap highly.
+Greetings are a distinct *class of input*, so they are handled as one: a query
+is refused only when **every** token is conversational filler. That leaves
+"what is a hello world program" and "how are you supposed to file taxes"
+answerable, and it declines **0 of the 165 held-out queries** — the rail costs
+nothing in false refusals. It is not exhaustive ("thank you so much" still gets
+through to retrieval); it covers the openers a first-time user actually types.
+
 Unicode normalisation is load-bearing. NFKC folding closes the fullwidth bypass
 (`ｉｇｎｏｒｅ　ｐｒｅｖｉｏｕｓ`), and invisible characters are handled in two classes —
 zero-width space and bidi overrides become a *space* (deleting them would weld
