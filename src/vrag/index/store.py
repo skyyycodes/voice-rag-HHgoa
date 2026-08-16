@@ -17,6 +17,10 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.ipc as ipc
 
+# Chunk text compresses ~3x with zstd and decompresses fast enough that load
+# time still beats reading the uncompressed file off disk.
+_IPC_OPTS = ipc.IpcWriteOptions(compression="zstd")
+
 from ..chunking.base import Chunk
 
 
@@ -84,13 +88,15 @@ class ChunkStore:
                 "is_selected": pa.array(self.is_selected),
             }
         )
-        with ipc.new_file(path, table.schema) as writer:
+        with ipc.new_file(path, table.schema, options=_IPC_OPTS) as writer:
             writer.write_table(table)
 
         ctx_table = pa.table(
             {"context": pa.array(list(uniq_context.keys()), type=pa.large_string())}
         )
-        with ipc.new_file(_context_path(path), ctx_table.schema) as writer:
+        with ipc.new_file(
+            _context_path(path), ctx_table.schema, options=_IPC_OPTS
+        ) as writer:
             writer.write_table(ctx_table)
 
     @classmethod
