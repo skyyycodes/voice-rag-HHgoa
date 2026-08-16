@@ -94,12 +94,14 @@ class Settings(BaseSettings):
     rerank_onnx_file: str = "onnx/model_qint8_avx512_vnni.onnx"
     # This model keeps its tokenizer at the repo root, unlike the bi-encoder.
     rerank_tokenizer_file: str = "tokenizer.json"
-    # 128 rather than the 64 that real pair lengths (p50=59) would suggest.
-    # Truncating to 64 halves the cost per pair, but it was measured to cost
-    # accuracy too — R@1 0.152 -> 0.139 — because the tail that gets cut is
-    # exactly the long passages where the answer sits late in the text. The
-    # cheaper setting was tried and rejected on data.
-    rerank_max_tokens: int = 128
+    # The reranker runs as a two-stage cascade, and the stages want different
+    # truncations. Stage 1 is wide and cheap over indexed chunks; stage 2 is
+    # narrow and reads full context, where the extra length is what lets it
+    # separate the best answer from a near-miss.
+    rerank_stage1_tokens: int = 64
+    rerank_stage2_tokens: int = 128
+    # Survivors of stage 1 that stage 2 re-scores.
+    rerank_stage2_depth: int = 5
     # Ceiling on pairs scored per query; the *actual* depth is chosen per
     # request from the budget still remaining.
     #
@@ -109,7 +111,7 @@ class Settings(BaseSettings):
     # P100 breaches the 200ms bar. A system that cites one passage is judged on
     # R@1, so the deeper setting was rejected. See
     # bench/results/quality_vs_budget.json.
-    rerank_depth: int = 8
+    rerank_depth: int = 16
     # Startup timing is on short probe pairs in an idle process; real traffic
     # is longer and contends with the bi-encoder, so the measured figure is
     # multiplied by this before the budget maths trusts it.

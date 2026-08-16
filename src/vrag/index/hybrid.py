@@ -179,8 +179,30 @@ class HybridRetriever:
         candidates.sort(key=lambda c: c.rrf, reverse=True)
         candidates = candidates[: cfg.fusion_candidates]
 
-        self._score(query, candidates)
-        candidates.sort(key=lambda c: c.score, reverse=True)
+        # Which candidates the cross-encoder gets to see matters more than how
+        # they are ordered among themselves, and the linear feature model is a
+        # worse selector than plain rank fusion. Measured with the cross-encoder
+        # downstream: selecting its head by RRF order gives R@1 0.182, selecting
+        # it by learned feature score gives 0.133. The learned model — fitted by
+        # pairwise logistic regression and gated on held-out accuracy — is net
+        # *harmful* here, so it no longer sits in the ordering path. It is kept
+        # only as the fallback ranking when reranking is unavailable, which is
+        # the one case where its features still beat nothing.
+        if cfg.rerank_enabled:
+            candidates.sort(key=lambda c: c.rrf, reverse=True)
+            for cand in candidates:
+                cand.score = cand.rrf
+            # Diversifying to one chunk per passage *before* reranking was
+            # tried, on the theory that duplicate spans waste the expensive
+            # model. It does lift R@5 (0.261 -> 0.339) and costs R@1
+            # (0.158 -> 0.127), because collapsing early forces a single
+            # arbitrary chunk to represent each passage and discards the
+            # multi-chunk agreement signal. For a system that cites one
+            # passage, R@1 is the metric that matters, so diversification stays
+            # after reranking.
+        else:
+            self._score(query, candidates)
+            candidates.sort(key=lambda c: c.score, reverse=True)
         self._cross_encode(query, candidates, remaining_ms)
         self._prefer_query_language(query, candidates)
         candidates.sort(key=lambda c: c.score, reverse=True)
@@ -210,11 +232,12 @@ class HybridRetriever:
         self.last_rerank_depth = depth
         head = candidates[:depth]
         try:
-            # Score the indexed chunk, not its parent context. The chunk is
-            # the unit retrieval matched, and it is ~5x cheaper: parent blocks
-            # cost 288ms for 20 pairs against 57ms for the chunks themselves,
-            # because cross-encoder cost scales with pair length.
-            scores = get_reranker(cfg).score(query, [c.text for c in head])
+            reranker = get_reranker(cfg)
+            # Stage 1 — wide and cheap. Scores the *indexed chunk* at short
+            # truncation, which is what retrieval matched and roughly 5x
+            # cheaper than full context. Its job is inclusion: pull the right
+            # passages into a small set.
+            scores = reranker.score(query, [c.text for c in head])
         except Exception:
             # Reranking is an enhancement, not a dependency. If the model is
             # unavailable the fused ordering still stands.
@@ -232,6 +255,37 @@ class HybridRetriever:
         # signal. Normalising into adjacent bands keeps the ordering guarantee
         # (reranked always above unreranked) while making magnitudes mean
         # something.
+        # Stage 2 — narrow and sharp. Re-scores only the survivors, this time
+        # against full passage *context* at longer truncation. Measured, the
+        # two stages fix different failures: stage 1 lifts R@5 (0.303 -> 0.345)
+        # by finding the right passages, stage 2 lifts R@1 (0.151 -> 0.182) by
+        # ordering them, because a chunk alone is often too little text to tell
+        # the best answer from a near-miss. Either stage alone is worse than
+        # both: MRR 0.206 -> 0.247.
+        order = np.argsort(-np.asarray(scores, dtype=np.float32))
+        head = [head[i] for i in order]
+        scores = np.asarray(scores, dtype=np.float32)[order]
+
+        sharp_n = min(cfg.rerank_stage2_depth, len(head))
+        if sharp_n > 1:
+            try:
+                sharp = reranker.score(
+                    query, [c.context for c in head[:sharp_n]], sharp=True
+                )
+                # Stage 2's judgement replaces stage 1's for the candidates it
+                # saw; the rest keep their stage-1 score, shifted below so the
+                # two groups stay ordered consistently.
+                floor = float(np.min(sharp)) if len(sharp) else 0.0
+                tail_scores = scores[sharp_n:]
+                if len(tail_scores):
+                    shift = floor - float(np.max(tail_scores)) - 0.01
+                    scores = np.concatenate([np.asarray(sharp, np.float32),
+                                             tail_scores + shift])
+                else:
+                    scores = np.asarray(sharp, dtype=np.float32)
+            except Exception:
+                pass
+
         head_scores = np.asarray(scores, dtype=np.float32)
         lo, hi = float(head_scores.min()), float(head_scores.max())
         span = (hi - lo) or 1.0

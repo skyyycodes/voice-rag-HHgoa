@@ -332,17 +332,20 @@ their English sources). Warm-up runs excluded. Raw JSON in
 ### Latency — the 200ms target
 
 ```
-P50   55.64 ms     P70   62.34 ms     P95   90.50 ms     P100  149.51 ms
-within 200ms budget: 100.0% of queries      17.2 queries/sec, single process
+P50   94.82 ms     P70   99.35 ms     P95  101.14 ms     P100  130.45 ms
+within 200ms budget: 100.0% of queries      10.6 queries/sec, single process
 ```
 
 | stage | P50 | P70 | P95 | P100 |
 |---|---:|---:|---:|---:|
-| retrieve | 45.88 | 54.36 | 66.02 | 67.24 |
-| generate | 0.18 | 25.04 | 41.11 | 84.59 |
+| retrieve | 94.61 | 99.10 | 100.85 | 130.17 |
+| generate | 0.15 | 0.15 | 0.18 | 0.21 |
 | guard_input | 0.04 | 0.04 | 0.05 | 0.19 |
-| guard_evidence | 0.03 | 0.04 | 0.04 | 0.05 |
-| guard_output | 0.04 | 0.04 | 0.06 | 0.11 |
+| guard_evidence | 0.04 | 0.04 | 0.04 | 0.05 |
+| guard_output | 0.04 | 0.05 | 0.06 | 0.09 |
+
+The whole P50-to-P100 range spans 36ms. Almost all of it is the cross-encoder,
+which is a deliberate purchase — see below.
 
 Most of `retrieve` is the cross-encoder, which is a deliberate purchase: without
 it the pipeline runs at **P50 5.4ms** but scores MRR 0.176. Spending 40ms of a
@@ -374,14 +377,57 @@ actually constrains.
 | configuration | R@1 | R@5 | MRR@5 | p50 |
 |---|---:|---:|---:|---:|
 | dense only (ANN) | 0.109 | 0.291 | 0.170 | 2.5 ms |
-| BM25 only | 0.061 | 0.188 | 0.106 | 1.8 ms |
-| hybrid + RRF fusion | 0.145 | 0.273 | 0.184 | 53.1 ms |
-| hybrid + RRF + cross-encoder | **0.152** | **0.303** | **0.206** | 46.1 ms |
+| BM25 only | 0.061 | 0.188 | 0.106 | 1.7 ms |
+| hybrid + RRF (no cross-encoder) | 0.061 | 0.230 | 0.109 | 5.1 ms |
+| **hybrid + RRF + cross-encoder cascade** | **0.158** | **0.261** | **0.200** | 95.6 ms |
+
+Read the third row before the fourth. **Rank fusion alone is worse than dense
+retrieval alone** — MRR 0.109 against 0.170. Adding BM25 by rank actively hurts
+on this corpus, because BM25 is the weakest retriever here (MRR 0.106) and RRF
+weights it equally. The system is not saved by its fusion; it is saved by the
+cross-encoder, which lifts MRR **+83%** over the fusion it reranks.
+
+That is an uncomfortable table to publish and it is the accurate one.
 
 Full stack beats dense-only by **+21.1% MRR**. One thing the table says that a
 summary would hide: **RRF fusion alone is worse on R@5 than dense alone** —
 adding BM25 by rank costs recall on this corpus, and only the rerank stage
 recovers it.
+
+### The reranker is a two-stage cascade, and the learned model was removed
+
+Two stages, because they fix different failures:
+
+| stage | scores | truncation | depth | fixes |
+|---|---|---:|---:|---|
+| 1 — wide, cheap | indexed chunk | 64 tok | 16 | *inclusion* — pulls the right passages into a small set |
+| 2 — narrow, sharp | full passage context | 128 tok | 5 | *ordering* — a bare chunk is often too little text to separate the best answer from a near-miss |
+
+Either alone is worse than both. Stage 2 exists because scoring `context`
+instead of `text` was worth **+18% R@1** — a gain given away earlier for speed
+without checking what it cost.
+
+**The learned reranker is no longer in the ordering path.** A 7-feature linear
+model fitted by pairwise logistic regression and gated on held-out accuracy
+turned out to be a *worse* selector of the cross-encoder's candidate head than
+plain rank fusion: R@1 **0.133 with the learned model, 0.158 with RRF order**.
+It is retained only as the fallback ranking when the cross-encoder is
+unavailable. The most sophisticated component in the retrieval stack lost to
+the four lines directly beneath it.
+
+Also measured and rejected:
+
+| change | effect | verdict |
+|---|---|---|
+| rerank depth 32 over a wider pool | R@5 0.303 -> 0.358, R@1 0.151 -> 0.127, P100 breaks 200ms | rejected |
+| truncate pairs to 64 tokens everywhere | 2x cheaper, R@1 0.152 -> 0.139 | rejected (kept for stage 1 only) |
+| diversify to one chunk per passage *before* reranking | R@5 0.261 -> 0.339, R@1 0.158 -> 0.127 | rejected |
+| pseudo-relevance feedback (k=3, several alphas) | R@5 0.200 -> 0.176 at 8x latency | rejected |
+| 4x corpus (485k chunks) | R@5 0.303 -> 0.193 | rejected |
+
+Every one of these is a change I proposed, implemented, measured, and threw
+away. They are listed because a table where every decision happened to be
+right is not a table anyone should believe.
 
 ### Spending the budget instead of banking it
 

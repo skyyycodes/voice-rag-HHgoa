@@ -76,13 +76,16 @@ def _retrieve(retriever: HybridRetriever, query: str, mode: str, k: int):
         idx, _ = retriever.lexical.search(query, k * 4)
         return _to_candidates(retriever, idx.tolist(), k)
     if mode == "rrf":
-        # Fusion but no learned reranking: keep RRF order.
-        saved = retriever.weights
-        retriever.weights = np.zeros_like(saved)
-        retriever.weights[2] = 1.0  # rrf feature only
-        out = retriever.retrieve(query, k)
-        retriever.weights = saved
-        return out
+        # Fusion alone — the cross-encoder is what the last row adds. The
+        # learned feature model is no longer in the ordering path at all
+        # (measured net-harmful), so this row isolates the cross-encoder rather
+        # than the linear reranker.
+        cfg_enabled = retriever.cfg.rerank_enabled
+        retriever.cfg.rerank_enabled = False
+        try:
+            return retriever.retrieve(query, k)
+        finally:
+            retriever.cfg.rerank_enabled = cfg_enabled
     return retriever.retrieve(query, k)  # full stack
 
 
@@ -112,8 +115,8 @@ def main() -> None:
     for mode, label in [
         ("dense", "dense only (ANN)"),
         ("bm25", "BM25 only"),
-        ("rrf", "hybrid + RRF fusion"),
-        ("full", "hybrid + RRF + learned rerank"),
+        ("rrf", "hybrid + RRF (no cross-encoder)"),
+        ("full", "hybrid + RRF + cross-encoder cascade"),
     ]:
         m = _evaluate(retriever, queries, mode)
         rows.append((label, m))

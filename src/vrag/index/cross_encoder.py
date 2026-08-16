@@ -59,8 +59,16 @@ class CrossEncoderReranker:
             cfg.rerank_model, cfg.rerank_tokenizer_file
         )
 
-        self.tokenizer = Tokenizer.from_file(tok_path)
-        self.tokenizer.enable_truncation(cfg.rerank_max_tokens)
+        # Two tokenizers, one per cascade stage, rather than one whose
+        # truncation is mutated between calls. `enable_truncation` mutates
+        # shared state, and the server handles requests concurrently — a second
+        # request arriving between stage 1 and stage 2 would silently truncate
+        # the wrong stage. Loading twice costs a moment at startup and removes
+        # the race entirely.
+        self.tok_wide = Tokenizer.from_file(tok_path)
+        self.tok_wide.enable_truncation(cfg.rerank_stage1_tokens)
+        self.tok_sharp = Tokenizer.from_file(tok_path)
+        self.tok_sharp.enable_truncation(cfg.rerank_stage2_tokens)
 
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = cfg.onnx_threads
@@ -77,12 +85,17 @@ class CrossEncoderReranker:
         self._input_names = {i.name for i in self.session.get_inputs()}
         self.ms_per_pair = _MS_PER_PAIR_DEFAULT
 
-    def score(self, query: str, docs: list[str]) -> np.ndarray:
-        """Relevance logit per (query, doc) pair. Higher is more relevant."""
+    def score(self, query: str, docs: list[str], sharp: bool = False) -> np.ndarray:
+        """Relevance logit per (query, doc) pair. Higher is more relevant.
+
+        `sharp` selects the longer truncation used by the cascade's second
+        stage, which reads full passage context rather than the indexed chunk.
+        """
         if not docs:
             return np.zeros(0, dtype=np.float32)
 
-        encoded = self.tokenizer.encode_batch([(query, d) for d in docs])
+        tokenizer = self.tok_sharp if sharp else self.tok_wide
+        encoded = tokenizer.encode_batch([(query, d) for d in docs])
         width = max(len(e.ids) for e in encoded)
         ids = np.zeros((len(encoded), width), dtype=np.int64)
         mask = np.zeros((len(encoded), width), dtype=np.int64)
@@ -107,7 +120,8 @@ class CrossEncoderReranker:
         """
         probe_q = "what is a corporation"
         probe_d = ["A corporation is a company authorized to act as a legal entity."] * 8
-        self.score(probe_q, probe_d[:2])  # warm the graph; discard
+        self.score(probe_q, probe_d[:2])          # warm the graph; discard
+        self.score(probe_q, probe_d[:2], sharp=True)
 
         best = float("inf")
         for _ in range(3):
