@@ -25,7 +25,7 @@ from .config import settings
 from .corpus import load
 from .embed import encode_passages, get_encoder
 from .index.dense import DenseIndex
-from .index.hybrid import HybridRetriever, compute_idf
+from .index.hybrid import FEATURES, HybridRetriever, compute_idf
 from .index.lexical import LexicalIndex
 from .index.rerank_fit import build_pairs, fit, pair_accuracy, report
 from .index.store import ChunkStore
@@ -93,11 +93,32 @@ def main() -> None:
     weights = fit(pos, neg)
     retriever.weights = weights
     print(report(weights))
-    print(f"      train pairs: {len(pos):,}  train pair-acc: {pair_accuracy(weights, pos, neg):.3f}")
+    train_acc = pair_accuracy(weights, pos, neg)
+    print(f"      train pairs: {len(pos):,}  train pair-acc: {train_acc:.3f}")
 
+    # A reranker is only worth shipping if it generalises. Fitting 7 correlated
+    # features on a few thousand pairs overfits easily, and a model at chance on
+    # held-out queries is strictly worse than the RRF ordering it replaces — it
+    # adds latency and reorders results according to noise. So the build
+    # *measures* generalisation and refuses to ship a model that fails it,
+    # falling back to pure rank fusion.
+    held_acc = float("nan")
     if held_out:
         h_pos, h_neg = build_pairs(retriever, held_out, gold_chunks, cfg)
-        print(f"      held-out pair-acc: {pair_accuracy(weights, h_pos, h_neg):.3f}")
+        held_acc = pair_accuracy(weights, h_pos, h_neg)
+        print(f"      held-out pair-acc: {held_acc:.3f}")
+
+        if not (held_acc >= cfg.rerank_min_held_out_acc):
+            rrf_only = np.zeros(len(FEATURES), dtype=np.float32)
+            rrf_only[FEATURES.index("rrf")] = 1.0
+            weights = rrf_only
+            retriever.weights = weights
+            print(
+                f"      held-out accuracy {held_acc:.3f} < "
+                f"{cfg.rerank_min_held_out_acc:.2f} — the learned reranker does not "
+                f"generalise.\n      Falling back to RRF-only weights; the ablation "
+                f"in vrag.eval_retrieval reports both."
+            )
 
     print("[7/7] saving")
     store.save(cfg.chunk_store)
@@ -142,6 +163,11 @@ def main() -> None:
         "strategies": sorted({s for c in chunks for s in c.strategies}),
         "chunk_stats": {k: v for k, v in stats.produced.items()},
         "build_seconds": round(time.perf_counter() - t0, 1),
+        "rerank": {
+            "train_pair_acc": round(float(train_acc), 4),
+            "held_out_pair_acc": None if held_acc != held_acc else round(float(held_acc), 4),
+            "shipped": "learned" if held_acc == held_acc and held_acc >= cfg.rerank_min_held_out_acc else "rrf_only",
+        },
     }
     cfg.manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 

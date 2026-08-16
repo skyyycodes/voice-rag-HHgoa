@@ -1,5 +1,19 @@
 """Multi-strategy fan-out.
 
+A note on sizing, because it is the difference between seven strategies and
+seven copies of one. Chunk-size defaults in the wild are written for
+document-scale text — 200-500 tokens. MS MARCO passages are not documents:
+measured over this corpus they run **48 tokens at the median, 116 at p99, 3
+sentences typical**. Ceilings of 120-200 tokens therefore returned the entire
+passage for 99-100% of inputs, and `fixed`, `recursive` and `metadata_aware`
+collapsed into duplicates of one another (`recursive` reached 96.9% duplicate,
+contributing 535 unique chunks out of 17k passages).
+
+Every ceiling here is set from that measured distribution instead, roughly 3x
+smaller than the conventional default, so each strategy actually cuts where its
+own rule says it should.
+
+
 Running seven strategies over the same passage produces overlapping output —
 a short passage yields near-identical text from `recursive`, `metadata_aware`
 and `semantic`. Indexing all of it would inflate the index ~4x and, worse,

@@ -23,7 +23,18 @@ from pathlib import Path
 import bm25s
 import numpy as np
 
-_WORD = re.compile(r"\w+", re.UNICODE)
+# `\w` matches Unicode *letters* but not combining *marks* (category Mn/Mc).
+# Indic scripts write vowels as marks attached to consonants, so a plain `\w+`
+# breaks at every matra and shreds words into consonant fragments:
+#
+#     कॉर्पोरेशन  ->  क, र, प, र, शन        (should be one token)
+#     சிப்சா       ->  ச, ப, ச               (should be one token)
+#
+# That silently destroyed BM25, IDF, the reranker's lexical features, the
+# grounding check, and extractive span scoring — for every language in the
+# corpus except English. The explicit range covers the Indic blocks
+# (Devanagari through Sinhala) plus Latin combining diacritics.
+_WORD = re.compile(r"[\wऀ-෿̀-ͯ]+", re.UNICODE)
 # Latin-script detection: if a token is pure ASCII we can stem it properly.
 _ASCII = re.compile(r"^[a-z0-9]+$")
 

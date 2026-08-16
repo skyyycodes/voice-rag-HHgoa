@@ -28,7 +28,11 @@ _TERMINATORS = "।॥؟۔?!."
 _ABBREV = r"(?<!\b[A-Z])(?<!\bMr)(?<!\bMrs)(?<!\bDr)(?<!\bSt)(?<!\bNo)(?<!\bvs)(?<!\bInc)(?<!\bJr)"
 _SENT_SPLIT = re.compile(rf"(?<=[{_TERMINATORS}])" + _ABBREV + r"\s+")
 
-_WORD = re.compile(r"\w+", re.UNICODE)
+# Includes Indic combining marks — a bare `\w+` breaks at every matra and
+# shreds Devanagari/Bengali/Tamil words into consonant fragments, which
+# would size every non-English chunk by a fragment count rather than a
+# word count. See `index/lexical.py` for the full explanation.
+_WORD = re.compile(r"[\wऀ-෿̀-ͯ]+", re.UNICODE)
 
 
 def split_sentences(text: str) -> list[str]:

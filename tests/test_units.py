@@ -241,3 +241,50 @@ def test_registry_history_is_bounded():
     for _ in range(50):
         registry.call("noop")
     assert len(registry.calls) == 10
+
+
+# --- Indic tokenisation (regression) --------------------------------------
+@pytest.mark.parametrize(
+    "text,expected_first",
+    [
+        ("कॉर्पोरेशन क्या है", "कॉर्पोरेशन"),      # Devanagari
+        ("একটি কর্পোরেশন হল", "একটি"),             # Bengali
+        ("சிப்சா என்றால் என்ன", "சிப்சா"),          # Tamil
+    ],
+)
+def test_indic_words_survive_tokenisation(text, expected_first):
+    """`\\w` matches Unicode letters but not combining marks, so a bare `\\w+`
+    shreds every Indic word at its vowel signs — कॉर्पोरेशन became
+    ['क','र','प','र','शन']. That silently broke BM25, IDF, the reranker's
+    lexical features, grounding, and extractive span scoring for every
+    language except English."""
+    from vrag.index.lexical import _WORD
+
+    assert _WORD.findall(text)[0] == expected_first
+
+
+def test_chunk_token_counts_are_word_counts_not_fragments():
+    """Chunk sizing uses the same class; fragment counts would make every
+    Indic chunk a fraction of its intended length."""
+    from vrag.chunking.base import token_len
+
+    assert token_len("कॉर्पोरेशन क्या है") == 3
+    assert token_len("சிப்சா என்றால் என்ன") == 3
+
+
+# --- personal-scope rail --------------------------------------------------
+@pytest.mark.parametrize(
+    "query,allowed",
+    [
+        ("what did I have for breakfast", False),
+        ("who am I sitting next to", False),
+        ("what is my bank account balance", False),
+        # Must NOT reject: these are generic, answerable, and real MS MARCO
+        # phrasing. A blanket rule on "my"/"I" would break them.
+        ("how much does my dog need to eat", True),
+        ("what is my credit score", True),
+        ("my heart rate is 120 what does that mean", True),
+    ],
+)
+def test_personal_scope_rail_is_narrow(query, allowed):
+    assert check_input(query).allowed is allowed

@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     fusion_candidates: int = 40  # survivors of RRF, fed to the reranker
     final_k: int = 5  # chunks handed to answer generation
     rrf_k: float = 60.0  # RRF damping constant
+    # Held-out pairwise accuracy the learned reranker must beat to be shipped.
+    # Below this it is not better than the RRF ordering it would replace, and
+    # the build falls back rather than reordering results by noise.
+    rerank_min_held_out_acc: float = 0.55
 
     # HNSW build/search knobs. `ef_search` is the main latency/recall dial.
     hnsw_connectivity: int = 16
@@ -88,6 +92,12 @@ class Settings(BaseSettings):
     ood_dense_floor: float = 0.80
     # Minimum lexical+semantic overlap between answer and cited chunk.
     grounding_floor: float = 0.45
+    # Cosine below which a cross-lingual span counts as unrelated. e5
+    # similarities are compressed into a narrow high band, so this is ~0.78
+    # rather than the ~0.3 an uncalibrated intuition would suggest.
+    semantic_span_floor: float = 0.82
+    # Max sentences encoded on the cross-lingual span path.
+    semantic_span_limit: int = 24
     min_query_chars: int = 3
     max_query_chars: int = 512
 

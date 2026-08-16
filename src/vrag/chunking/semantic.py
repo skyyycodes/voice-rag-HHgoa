@@ -42,8 +42,8 @@ class SemanticChunker:
     # uniformly coherent passage is not sliced just because some boundary
     # happens to be its local maximum.
     min_distance: float = 0.08
-    max_tokens: int = 180
-    min_tokens: int = 20
+    max_tokens: int = 60
+    min_tokens: int = 10
     # Smooth distances over a ±1 sentence window. A single odd sentence
     # shouldn't trigger a cut; a genuine topic shift moves several in a row.
     smooth: bool = True

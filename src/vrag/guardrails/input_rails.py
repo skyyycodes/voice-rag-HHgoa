@@ -62,6 +62,27 @@ _INJECTION_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("delimiter_injection", re.compile(r"(<\|[a-z_]+\|>|\[/?INST\]|###\s*(system|assistant):)", re.IGNORECASE)),
 ]
 
+# Questions about the asker's own history or present situation. A static
+# corpus cannot answer these *however good retrieval is* — and similarity
+# search makes them look answerable, because "what did I have for breakfast"
+# genuinely retrieves passages about breakfast. The evidence rail cannot catch
+# that: the topic matches, only the scope is impossible.
+#
+# Deliberately narrow. A blanket rule on "my" or "I" would reject real MS MARCO
+# traffic ("how much does my dog need to eat" is a generic, answerable
+# question). These patterns match only first-person *experiential* framing —
+# past events the asker participated in, and present facts about the asker —
+# which no web-passage corpus contains.
+_PERSONAL_SCOPE: list[tuple[str, re.Pattern]] = [
+    ("personal_history", re.compile(
+        r"\b(what|who|where|when|why|how)\s+(did|have|had)\s+i\b", re.IGNORECASE)),
+    ("personal_state", re.compile(
+        r"\b(who|where)\s+am\s+i\b|\bam\s+i\s+(sitting|standing|currently)\b", re.IGNORECASE)),
+    ("personal_possession", re.compile(
+        r"\bmy\s+(password|bank\s+account|balance|house\s+keys?|phone|inbox|"
+        r"manager|calendar|current\s+location)\b", re.IGNORECASE)),
+]
+
 # PII we should not echo back into logs or an answer.
 _PII_PATTERNS: list[tuple[str, re.Pattern]] = [
     ("credit_card", re.compile(r"\b(?:\d[ -]*?){13,16}\b")),
@@ -140,6 +161,19 @@ def check_input(text: str, cfg: Settings = settings) -> GuardVerdict:
                 allowed=False,
                 decision=Decision.REJECT_MALFORMED,
                 reason="The query contains instruction-injection patterns.",
+                triggered=[name],
+            )
+
+    for name, pattern in _PERSONAL_SCOPE:
+        if pattern.search(cleaned):
+            return GuardVerdict(
+                allowed=False,
+                decision=Decision.REJECT_OFF_TOPIC,
+                reason=(
+                    "This asks about you personally. The system can only answer "
+                    "from an indexed passage corpus, which contains no "
+                    "information about the person asking."
+                ),
                 triggered=[name],
             )
 

@@ -21,7 +21,11 @@ from dataclasses import dataclass
 
 from .base import Chunk, ChunkMeta, make_chunk, split_sentences
 
-_WORD_SPAN = re.compile(r"\w+", re.UNICODE)
+# Includes Indic combining marks — a bare `\w+` breaks at every matra and
+# shreds Devanagari/Bengali/Tamil words into consonant fragments, which
+# would size every non-English chunk by a fragment count rather than a
+# word count. See `index/lexical.py` for the full explanation.
+_WORD_SPAN = re.compile(r"[\wऀ-෿̀-ͯ]+", re.UNICODE)
 
 
 def _token_spans(text: str) -> list[tuple[int, int]]:
@@ -52,8 +56,13 @@ class FixedTokenChunker:
     cuts mid-sentence, which is exactly why the other five exist.
     """
 
-    size: int = 120
-    overlap: int = 30
+    # Sized to the corpus, not to intuition. MS MARCO passages measure 48
+    # tokens at the median and 116 at p99; a 120-token window returned the
+    # whole passage for 99% of them, making this strategy — and `recursive`,
+    # and `metadata_aware` — degenerate duplicates of each other. See the
+    # sizing note in `registry.py`.
+    size: int = 40
+    overlap: int = 12
     name: str = "fixed"
 
     def split(self, text: str, meta: ChunkMeta) -> list[Chunk]:
@@ -90,8 +99,8 @@ class RecursiveChunker:
     default behaviour.
     """
 
-    max_tokens: int = 140
-    min_tokens: int = 24
+    max_tokens: int = 45
+    min_tokens: int = 12
     name: str = "recursive"
     separators: tuple[str, ...] = ("\n\n", "\n", "। ", "॥ ", ". ", "? ", "! ", "; ", ", ", " ")
 
@@ -176,8 +185,8 @@ class ParentChildChunker:
     collapse sibling hits into one context instead of returning near-duplicates.
     """
 
-    parent_tokens: int = 200
-    child_tokens: int = 45
+    parent_tokens: int = 60
+    child_tokens: int = 18
     name: str = "parent_child"
 
     def split(self, text: str, meta: ChunkMeta) -> list[Chunk]:
@@ -233,12 +242,12 @@ class MetadataAwareChunker:
         if self.profiles is None:
             # query_type -> (target tokens, overlap tokens)
             self.profiles = {
-                "NUMERIC": (60, 20),
-                "ENTITY": (90, 25),
-                "PERSON": (90, 25),
-                "LOCATION": (90, 25),
-                "DESCRIPTION": (160, 40),
-                "UNKNOWN": (120, 30),
+                "NUMERIC": (22, 8),
+                "ENTITY": (32, 10),
+                "PERSON": (32, 10),
+                "LOCATION": (32, 10),
+                "DESCRIPTION": (55, 16),
+                "UNKNOWN": (42, 12),
             }
 
     def split(self, text: str, meta: ChunkMeta) -> list[Chunk]:
@@ -294,7 +303,7 @@ class PropositionChunker:
     """
 
     min_tokens: int = 6
-    max_tokens: int = 45
+    max_tokens: int = 30
     name: str = "proposition"
     # English + transliterated Indic clause boundaries.
     clause_re: re.Pattern = re.compile(
