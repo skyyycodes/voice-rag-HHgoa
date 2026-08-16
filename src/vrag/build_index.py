@@ -23,7 +23,7 @@ import numpy as np
 from .chunking.registry import chunk_passages, default_chunkers
 from .config import settings
 from .corpus import load
-from .embed import encode, get_model
+from .embed import encode_passages, get_encoder
 from .index.dense import DenseIndex
 from .index.hybrid import HybridRetriever, compute_idf
 from .index.lexical import LexicalIndex
@@ -49,19 +49,19 @@ def main() -> None:
     print(f"      {len(passages):,} passages, {len(queries):,} labelled queries")
 
     print("[2/7] loading embedder")
-    get_model(cfg)
+    get_encoder(cfg)
 
     print("[3/7] chunking (7 strategies)")
     t = time.perf_counter()
     chunks, stats = chunk_passages(
-        passages, chunkers=default_chunkers(encode=lambda xs: encode(xs, cfg))
+        passages, chunkers=default_chunkers(encode=lambda xs: encode_passages(xs, cfg))
     )
     print(stats.report())
     print(f"      {time.perf_counter() - t:.1f}s")
 
     print("[4/7] embedding chunks")
     t = time.perf_counter()
-    vectors = encode([c.text for c in chunks], cfg)
+    vectors = encode_passages([c.text for c in chunks], cfg)
     print(f"      {len(vectors):,} x {vectors.shape[1]}d in {time.perf_counter() - t:.1f}s")
 
     print("[5/7] building indexes")
@@ -137,8 +137,8 @@ def main() -> None:
         "passages": len(passages),
         "chunks": len(chunks),
         "dim": int(vectors.shape[1]),
-        "model": cfg.static_model,
-        "quantize": cfg.embed_quantize,
+        "model": cfg.encoder_model,
+        "onnx": cfg.encoder_onnx_file,
         "strategies": sorted({s for c in chunks for s in c.strategies}),
         "chunk_stats": {k: v for k, v in stats.produced.items()},
         "build_seconds": round(time.perf_counter() - t0, 1),

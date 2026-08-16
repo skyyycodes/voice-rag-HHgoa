@@ -34,7 +34,7 @@ from pathlib import Path
 import numpy as np
 
 from ..config import Settings, settings
-from ..embed import encode_one
+from ..embed import encode_query
 from .dense import DenseIndex
 from .lexical import LexicalIndex, tokenize
 from .store import ChunkStore
@@ -115,7 +115,7 @@ class HybridRetriever:
         cfg = self.cfg
         k = k or cfg.final_k
 
-        qvec = encode_one(query, cfg)
+        qvec = encode_query(query, cfg)
         d_idx, d_score = self.dense.search(qvec, cfg.dense_candidates, cfg)
         l_idx, l_score = self.lexical.search(query, cfg.lexical_candidates)
 

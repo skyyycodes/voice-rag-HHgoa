@@ -68,9 +68,9 @@ def _retrieve(retriever: HybridRetriever, query: str, mode: str, k: int):
     """Isolate one stage of the pipeline at a time."""
     cfg = retriever.cfg
     if mode == "dense":
-        from .embed import encode_one
+        from .embed import encode_query
 
-        idx, _ = retriever.dense.search(encode_one(query, cfg), k * 4, cfg)
+        idx, _ = retriever.dense.search(encode_query(query, cfg), k * 4, cfg)
         return _to_candidates(retriever, idx.tolist(), k)
     if mode == "bm25":
         idx, _ = retriever.lexical.search(query, k * 4)
