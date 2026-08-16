@@ -27,6 +27,8 @@
   button:hover:not(:disabled) { border-color:var(--accent); }
   button:disabled { opacity:.45; cursor:not-allowed; }
   button.primary { background:var(--accent); color:#0b0d10; border-color:var(--accent); font-weight:600; }
+  button.probe { font-size:12.5px; padding:6px 11px; }
+  span.ok { color:var(--accent); } span.no { color:var(--warn); }
   #mic.rec { background:var(--bad); border-color:var(--bad); color:#fff; animation:pulse 1.1s infinite; }
   @keyframes pulse { 50% { opacity:.62; } }
   input[type=text], select { font:inherit; color:var(--fg); background:var(--bg);
@@ -71,10 +73,31 @@
       </select>
       <button class="primary" id="go">Ask</button>
     </div>
-    <p class="sub" id="hint" style="margin:12px 0 0">
-      Try: <code>कॉर्पोरेशन क्या है?</code> · <code>what is a corporation</code> ·
-      or something off-topic to see the system decline.
+    <div class="row" style="margin-top:12px">
+      <button id="ab" title="Answer the same question with and without the cross-encoder">
+        ⇄ A/B the reranker
+      </button>
+      <button id="why" title="Show why each candidate ranked where it did">
+        🔍 Explain ranking
+      </button>
+    </div>
+    <p class="sub" style="margin:14px 0 6px">
+      One-click probes — the guardrails, including two that <em>should</em> be answered:
     </p>
+    <div class="row" id="probes"></div>
+  </div>
+
+  <div class="card" id="abcard" hidden>
+    <div class="sub" style="margin-bottom:10px">
+      Same query, cross-encoder off vs on. This is the README ablation, run live
+      on your input.
+    </div>
+    <div class="scroll"><table id="abtable"></table></div>
+  </div>
+
+  <div class="card" id="whycard" hidden>
+    <div class="sub" style="margin-bottom:10px" id="whyhdr"></div>
+    <div class="scroll"><table id="whytable"></table></div>
   </div>
 
   <div class="card" id="out" hidden>
@@ -98,6 +121,13 @@
     <details style="margin-top:12px"><summary>Raw response</summary>
       <pre class="scroll" style="font:11px var(--mono); color:var(--dim)" id="raw"></pre>
     </details>
+  </div>
+  <div class="card" id="evidence" hidden>
+    <div class="sub" style="margin-bottom:10px">
+      Measured evidence — the same JSON the README numbers come from
+      (<code>/api/evidence</code>).
+    </div>
+    <div class="scroll"><table id="evtable"></table></div>
   </div>
 </div>
 
@@ -226,6 +256,76 @@ function stopRec() {
   $('mic').textContent = '🎙 Hold to speak';
 }
 
+// --- guardrail probes -----------------------------------------------------
+async function loadProbes() {
+  try {
+    const { probes } = await (await fetch('/api/probes')).json();
+    $('probes').innerHTML = probes.map((p, i) =>
+      `<button class="probe" data-i="${i}" title="${esc(p.expect)}">${esc(p.label)}</button>`
+    ).join('');
+    document.querySelectorAll('.probe').forEach(b => b.onclick = () => {
+      $('q').value = probes[b.dataset.i].query;
+      askText();
+    });
+  } catch {}
+}
+
+// --- live A/B of the cross-encoder ----------------------------------------
+async function runAB() {
+  const text = $('q').value.trim();
+  if (!text) return;
+  $('ab').disabled = true;
+  try {
+    const r = await (await fetch('/api/compare', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text })
+    })).json();
+    const row = (label, d) => `<tr><td>${label}</td><td class="n">${d.pipeline_ms.toFixed(1)}</td>` +
+      `<td class="n">${d.rerank_depth || '—'}</td><td>${esc(d.decision)}</td>` +
+      `<td>${esc((d.citation?.text || d.reason || '—').slice(0, 90))}</td></tr>`;
+    $('abcard').hidden = false;
+    $('abtable').innerHTML =
+      '<tr><th>configuration</th><th class="n">ms</th><th class="n">depth</th><th>decision</th><th>cited</th></tr>' +
+      row('without cross-encoder', r.without_cross_encoder) +
+      row('with cross-encoder', r.with_cross_encoder) +
+      `<tr><td colspan="5" class="muted">${r.citation_changed
+        ? `the cross-encoder changed which passage was cited, for +${r.extra_ms}ms`
+        : `both paths cited the same passage — the cross-encoder cost +${r.extra_ms}ms and changed nothing here`}</td></tr>`;
+  } catch (e) { alert('Compare failed: ' + e.message); }
+  finally { $('ab').disabled = false; }
+}
+
+// --- ranking explainer ----------------------------------------------------
+async function runWhy() {
+  const text = $('q').value.trim();
+  if (!text) return;
+  $('why').disabled = true;
+  try {
+    const r = await (await fetch('/api/explain', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text })
+    })).json();
+    $('whycard').hidden = false;
+    $('whyhdr').textContent =
+      `detected script: ${r.detected_script} · abstain below cross-encoder logit ${r.ood_floor}`;
+    $('whytable').innerHTML =
+      '<tr><th>#</th><th>lang</th><th>found by</th><th class="n">dense</th><th class="n">bm25</th>' +
+      '<th class="n">logit</th><th>strategies</th><th>chunk</th></tr>' +
+      r.candidates.map(c => {
+        const lg = c.cross_encoder_logit;
+        const cls = lg == null ? 'muted' : (lg < r.ood_floor ? 'no' : 'ok');
+        return `<tr><td>${c.rank}</td><td>${c.lang}</td><td>${c.found_by}</td>` +
+          `<td class="n">${c.dense_rank ?? '—'}</td><td class="n">${c.lexical_rank ?? '—'}</td>` +
+          `<td class="n"><span class="${cls}">${lg == null ? '—' : lg.toFixed(2)}</span></td>` +
+          `<td class="muted">${c.strategies.join(', ')}</td>` +
+          `<td>${esc(c.text.slice(0, 70))}</td></tr>`;
+      }).join('');
+  } catch (e) { alert('Explain failed: ' + e.message); }
+  finally { $('why').disabled = false; }
+}
+
+$('ab').onclick = runAB;
+$('why').onclick = runWhy;
 $('go').onclick = askText;
 $('q').onkeydown = e => e.key === 'Enter' && askText();
 // Press-and-hold, on both pointer and touch.
@@ -236,6 +336,29 @@ $('mic').ontouchstart = e => { e.preventDefault(); startRec(); };
 $('mic').ontouchend = e => { e.preventDefault(); stopRec(); };
 
 boot();
+loadProbes();
+loadEvidence();
+
+async function loadEvidence() {
+  try {
+    const e = await (await fetch('/api/evidence')).json();
+    const b = e.benchmark, g = e.guardrail_calibration, o = e.operating_point;
+    if (!b) return;
+    const p = b.latency_pipeline_ms, r = b.retrieval;
+    const rows = [
+      ['latency P50 / P70 / P100', `${p.p50} / ${p.p70} / ${p.p100} ms`],
+      ['within budget', `${b.budget.within_budget_pct}% of ${b.config.queries} held-out queries`],
+      ['Recall@1 / Recall@5 / MRR', `${r.recall_at_1} / ${r.recall_at_5} / ${r.mrr_at_5}`],
+      ['index', `${b.config.chunks.toLocaleString()} chunks · ${b.config.encoder}`],
+      ['rerank cost measured here', `${o.rerank_ms_per_pair_measured} ms/pair → depth ≤ ${o.rerank_depth_ceiling}`],
+    ];
+    if (g) rows.push(['out-of-domain rail',
+      `${(g.out_of_domain_caught * 100).toFixed(0)}% caught at ${(g.in_domain_declined * 100).toFixed(1)}% false-decline`]);
+    $('evidence').hidden = false;
+    $('evtable').innerHTML = rows.map(([k, v]) =>
+      `<tr><td class="muted">${k}</td><td>${esc(String(v))}</td></tr>`).join('');
+  } catch {}
+}
 </script>
 </body>
 </html>
