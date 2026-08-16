@@ -64,6 +64,12 @@ class OnnxEncoder:
         opts = ort.SessionOptions()
         opts.intra_op_num_threads = cfg.onnx_threads
         opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+        # Two ONNX sessions live in this process (bi-encoder + cross-encoder).
+        # By default each spins its threads while waiting for work, so on a
+        # 4-performance-core machine they busy-wait against each other and the
+        # cross-encoder ran ~4x slower in-pipeline than standalone. Yielding
+        # instead of spinning removes that interference.
+        opts.add_session_config_entry("session.intra_op.allow_spinning", "0")
         self.session = ort.InferenceSession(
             model_path, opts, providers=["CPUExecutionProvider"]
         )

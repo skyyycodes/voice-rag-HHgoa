@@ -133,8 +133,10 @@ class Pipeline:
         self.tools.register("guard_output", self._tool_guard_output, "Grounding verification")
 
     # -- tool implementations ---------------------------------------------
-    def _tool_retrieve(self, query: str, k: int | None = None) -> list[Candidate]:
-        return self.retriever.retrieve(query, k or self.cfg.final_k)
+    def _tool_retrieve(
+        self, query: str, k: int | None = None, remaining_ms: float | None = None
+    ) -> list[Candidate]:
+        return self.retriever.retrieve(query, k or self.cfg.final_k, remaining_ms)
 
     def _tool_extractive(self, query: str, candidates: list[Candidate], query_type: str = "DESCRIPTION") -> Answer:
         return answer_extractive(query, candidates, self.retriever.idf, query_type, self.cfg)
@@ -191,8 +193,15 @@ class Pipeline:
         # --- stage 3: retrieval -------------------------------------------
         span = tel.start("retrieve")
         try:
+            # Hand retrieval the time actually left. This is what makes the
+            # latency budget a scheduling input rather than a post-hoc metric:
+            # the cross-encoder reranks as deep as the remaining budget allows.
+            remaining = self.cfg.budget_total_ms - tel.pipeline_ms()
             candidates = self.tools.call(
-                "retrieve", query=clean_query, k=request.top_k or self.cfg.final_k
+                "retrieve",
+                query=clean_query,
+                k=request.top_k or self.cfg.final_k,
+                remaining_ms=remaining,
             )
             span.close(ok=True)
         except Exception as exc:
@@ -202,6 +211,7 @@ class Pipeline:
                 reason="Retrieval failed.", transcript=transcript,
             )
 
+        rerank_depth = getattr(self.retriever, "last_rerank_depth", 0)
         if span.ms > self.cfg.budget_retrieve_ms:
             tel.degraded.append(f"retrieve_over_budget:{span.ms:.0f}ms")
 
@@ -246,6 +256,7 @@ class Pipeline:
             Decision.ANSWER, answer.text, tel, started,
             transcript=transcript, citations=answer.citations,
             mode=answer.mode, scores=out_verdict.scores,
+            rerank_depth=rerank_depth, budget_remaining=remaining,
         )
 
     # -- stage helpers -----------------------------------------------------
@@ -346,6 +357,8 @@ class Pipeline:
         citations: list | None = None,
         mode: str = "extractive",
         scores: dict | None = None,
+        rerank_depth: int = 0,
+        budget_remaining: float = 0.0,
     ) -> QueryResponse:
         total = (time.perf_counter() - started) * 1000
         pipeline = tel.pipeline_ms()
@@ -365,4 +378,6 @@ class Pipeline:
             pipeline_ms=round(pipeline, 3),
             budget_exceeded=pipeline > self.cfg.budget_total_ms,
             degraded=tel.degraded,
+            rerank_depth=rerank_depth,
+            budget_remaining_ms=round(budget_remaining, 2),
         )

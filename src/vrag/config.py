@@ -68,16 +68,42 @@ class Settings(BaseSettings):
     # Below this it is not better than the RRF ordering it would replace, and
     # the build falls back rather than reordering results by noise.
     rerank_min_held_out_acc: float = 0.55
-    # Answer in the language the question was asked in. Small on purpose: it
-    # breaks ties between translations of the same passage without letting a
-    # weak same-language match beat a strong foreign one.
-    same_language_bonus: float = 0.25
-    english_fallback_bonus: float = 0.10
+    # Answer in the language the question was asked in. Expressed as a
+    # *fraction of the candidate set score spread*, so it behaves identically
+    # whether the linear model (~±2) or the cross-encoder (~±11) produced the
+    # scores. Small on purpose: it breaks ties between translations of the same
+    # passage without letting a weak same-language match beat a strong foreign
+    # one.
+    same_language_bonus: float = 0.15
+    english_fallback_bonus: float = 0.06
 
     # HNSW build/search knobs. `ef_search` is the main latency/recall dial.
     hnsw_connectivity: int = 16
     hnsw_expansion_add: int = 128
     hnsw_expansion_search: int = 64
+
+    # ---- cross-encoder rerank ----------------------------------------------
+    # Trained on multilingual MS MARCO — this system's exact task. Reads the
+    # (query, chunk) pair jointly, so it judges whether a passage *answers* the
+    # question rather than whether the two look alike.
+    rerank_enabled: bool = True
+    rerank_model: str = "cross-encoder/mmarco-mMiniLMv2-L12-H384-v1"
+    rerank_onnx_file: str = "onnx/model_qint8_avx512_vnni.onnx"
+    # This model keeps its tokenizer at the repo root, unlike the bi-encoder.
+    rerank_tokenizer_file: str = "tokenizer.json"
+    rerank_max_tokens: int = 128
+    # Ceiling on pairs scored per query; the *actual* depth is chosen per
+    # request from the budget still remaining. 8 is where the measured
+    # quality-vs-budget curve peaks on MRR while keeping *every* percentile
+    # (P100 139.8ms) inside the 200ms bar — deeper buys R@5 but breaks it.
+    # See bench/results/quality_vs_budget.json.
+    rerank_depth: int = 8
+    local_rerank_path: str = ""
+    local_rerank_tokenizer: str = ""
+    # Lifts cross-encoder logits (roughly -11..+11) clear of the linear
+    # feature scores so a reranked candidate never sorts below an unreranked
+    # one purely because the two scales differ.
+    rerank_score_offset: float = 100.0
 
     # ---- latency budget (milliseconds, per stage) --------------------------
     # The harness enforces these; a stage that blows its budget degrades
@@ -103,6 +129,10 @@ class Settings(BaseSettings):
     semantic_span_floor: float = 0.82
     # Max sentences encoded on the cross-lingual span path.
     semantic_span_limit: int = 24
+    # Per-rank multiplier when choosing which retrieved passage to quote.
+    # Geometric so retrieval order dominates span score; at 0.72 a rank-3
+    # sentence needs to be ~4.6x better in isolation to win.
+    answer_rank_decay: float = 0.60
     min_query_chars: int = 3
     max_query_chars: int = 512
 

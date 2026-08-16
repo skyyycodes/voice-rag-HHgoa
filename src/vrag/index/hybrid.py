@@ -35,6 +35,7 @@ import numpy as np
 from ..config import Settings, settings
 from ..embed import encode_query
 from ..script_detect import detect_script
+from .cross_encoder import depth_for_budget, get_reranker
 from .dense import DenseIndex
 from .lexical import LexicalIndex, tokenize
 from .store import ChunkStore
@@ -109,9 +110,23 @@ class HybridRetriever:
             else np.array([1.0, 0.8, 2.0, 1.2, 0.8, 0.3, -0.1], dtype=np.float32)
         )
         self.idf = idf or {}
+        # Depth used by the most recent `retrieve`, for telemetry.
+        self.last_rerank_depth = 0
 
     # -- retrieval ---------------------------------------------------------
-    def retrieve(self, query: str, k: int | None = None) -> list[Candidate]:
+    def retrieve(
+        self,
+        query: str,
+        k: int | None = None,
+        remaining_ms: float | None = None,
+    ) -> list[Candidate]:
+        """Retrieve the top `k` chunks.
+
+        `remaining_ms` is how much of the request's latency budget is left. It
+        controls how deeply the cross-encoder reranks — the pipeline spends
+        spare budget on quality rather than banking it. Omitted means "assume
+        the full budget", which is what offline evaluation wants.
+        """
         cfg = self.cfg
         k = k or cfg.final_k
 
@@ -147,9 +162,50 @@ class HybridRetriever:
         candidates = candidates[: cfg.fusion_candidates]
 
         self._score(query, candidates)
+        candidates.sort(key=lambda c: c.score, reverse=True)
+        self._cross_encode(query, candidates, remaining_ms)
         self._prefer_query_language(query, candidates)
         candidates.sort(key=lambda c: c.score, reverse=True)
         return self._diversify(candidates, k)
+
+    def _cross_encode(
+        self, query: str, candidates: list[Candidate], remaining_ms: float | None
+    ) -> None:
+        """Rescore the head of the list with the cross-encoder.
+
+        Only the head: the cheap stages have already ordered the pool, so the
+        expensive model is spent where it can change the answer. Scores are
+        *replaced*, not blended — the cross-encoder reads the pair jointly and
+        is strictly better informed than the feature model, so averaging the
+        two would drag its judgement back toward the weaker signal.
+        """
+        cfg = self.cfg
+        self.last_rerank_depth = 0
+        if not cfg.rerank_enabled or not candidates:
+            return
+
+        budget = cfg.budget_total_ms if remaining_ms is None else remaining_ms
+        depth = depth_for_budget(budget, cfg)
+        if depth <= 1:
+            return
+
+        self.last_rerank_depth = depth
+        head = candidates[:depth]
+        try:
+            # Score the indexed chunk, not its parent context. The chunk is
+            # the unit retrieval matched, and it is ~5x cheaper: parent blocks
+            # cost 288ms for 20 pairs against 57ms for the chunks themselves,
+            # because cross-encoder cost scales with pair length.
+            scores = get_reranker(cfg).score(query, [c.text for c in head])
+        except Exception:
+            # Reranking is an enhancement, not a dependency. If the model is
+            # unavailable the fused ordering still stands.
+            return
+
+        # Shift into a band above the feature scores so the reranked head
+        # always outranks the untouched tail, whose scores are on another scale.
+        for cand, s in zip(head, scores):
+            cand.score = float(s) + cfg.rerank_score_offset
 
     def _prefer_query_language(self, query: str, candidates: list[Candidate]) -> None:
         """Nudge same-script candidates above their translations.
@@ -163,16 +219,31 @@ class HybridRetriever:
         wrong answer in the right one.
         """
         want = detect_script(query)
-        if not want:
+        if not want or len(candidates) < 2:
             return
+
+        # The bonus is expressed as a fraction of the candidate set's own score
+        # spread, not as an absolute number. Two different scorers feed this:
+        # the linear model produces scores around ±2, the cross-encoder
+        # produces logits around ±11. A fixed bonus tuned for one is either
+        # overwhelming or invisible on the other — when the cross-encoder was
+        # added, a fixed +0.25 silently stopped having any effect and Hindi
+        # questions went back to being answered in Bengali.
+        scores = np.array([c.score for c in candidates], dtype=np.float32)
+        spread = float(scores.max() - scores.min())
+        if spread < 1e-6:
+            spread = 1.0
+
+        same = self.cfg.same_language_bonus * spread
+        english = self.cfg.english_fallback_bonus * spread
         for cand in candidates:
             if cand.lang == want:
-                cand.score += self.cfg.same_language_bonus
+                cand.score += same
             elif cand.lang == "eng":
                 # English is the corpus's source language and the most common
                 # second language of its readers, so it is the preferred
                 # fallback when the query's own language is unavailable.
-                cand.score += self.cfg.english_fallback_bonus
+                cand.score += english
 
     def _new_candidate(self, i: int) -> Candidate:
         s = self.store

@@ -105,6 +105,12 @@ class QueryResponse(BaseModel):
     pipeline_ms: float = 0.0
     budget_exceeded: bool = False
     degraded: list[str] = Field(default_factory=list)
+    # How many candidates the cross-encoder actually rescored for this request.
+    # Chosen from the budget still remaining, so it varies per request — a slow
+    # transcription leaves less, and the pipeline reranks shallower rather than
+    # blowing the deadline.
+    rerank_depth: int = 0
+    budget_remaining_ms: float = 0.0
 
     def timing_map(self) -> dict[str, float]:
         return {t.stage: t.ms for t in self.timings}

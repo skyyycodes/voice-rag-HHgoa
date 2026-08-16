@@ -153,12 +153,18 @@ def answer_extractive(
 
     best: tuple[float, Candidate, str, int, int] | None = None
     for i, (cand, rank, sentence, _position, start, end) in enumerate(spans):
-        # Retrieval rank is evidence too: a great sentence inside a poorly
-        # matched passage is usually a coincidence of shared vocabulary.
+        # Retrieval rank is strong evidence, and this weighting used to be far
+        # too weak to express that. With a 1.0-1.15 multiplier the span score
+        # dominated, and the answerer cited rank-0 through rank-4 at almost
+        # uniform rates (35/29/31/28/41 over 165 queries) — it was effectively
+        # ignoring the ranking that the entire retrieval stack exists to
+        # produce. Geometric decay makes rank the primary term: a rank-4
+        # sentence must be dramatically better in isolation to displace rank 0.
+        #
         # Taken from enumerate rather than `candidates.index(cand)` — the latter
         # is O(n^2) and invokes the dataclass `__eq__`, which compares the numpy
         # feature vectors and raises on an ambiguous truth value.
-        rank_weight = 1.0 + 0.15 * max(0.0, 1.0 - rank / max(1, n))
+        rank_weight = cfg.answer_rank_decay ** rank
         base = float(lexical[i]) if semantic is None else float(semantic[i])
         score = base * rank_weight
         if best is None or score > best[0]:
