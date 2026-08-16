@@ -64,16 +64,43 @@ more than one:
 
 | strategy | unit | idea |
 |---|---|---|
-| `fixed` | token window + overlap | the baseline; cuts mid-sentence by design |
-| `recursive` | structural descent | paragraph → sentence → clause → word; only cuts mid-sentence as a last resort |
+| `fixed` | 40-token window, 12 overlap | the baseline; cuts mid-sentence by design |
+| `recursive` | structural descent, ≤45 tokens | paragraph → sentence → clause → word; only cuts mid-sentence as a last resort |
 | `sentence_window` | 1 sentence, ±1 context | match narrow, read wide — a sharp vector, but neighbours for the reader |
-| `parent_child` | ~45-token child, 200-token parent | siblings resolve to one identical context, so duplicates collapse |
-| `metadata_aware` | routed by `query_type` | NUMERIC gets 60 tokens (a figure must not be buried), DESCRIPTION gets 160 |
+| `parent_child` | 18-token child, 60-token parent | siblings resolve to one identical context, so duplicates collapse |
+| `metadata_aware` | routed by `query_type` | NUMERIC gets 22 tokens (a figure must not be buried), DESCRIPTION gets 55 |
 | `proposition` | atomic clause | highest-precision unit; undersized fragments merge so a clause never loses its subject |
-| `semantic` | embedding-boundary | cuts where meaning shifts, at a percentile of *this passage's own* distances |
+| `semantic` | embedding-boundary, ≤60 tokens | cuts where meaning shifts, at a percentile of *this passage's own* distances |
 
 Segmentation is script-aware: Devanagari/Bengali danda (`।`, `॥`), Urdu (`؟`,
 `۔`), not just the Latin full stop.
+
+### Those sizes are measured, not conventional
+
+Chunk-size defaults in the wild assume document-scale text — 200–500 tokens.
+This corpus is not documents. Measured over it, MS MARCO passages run
+**48 tokens at the median, 116 at p99, 3 sentences typical**.
+
+The first build used conventional ceilings (120–200 tokens), which meant
+**99–100% of passages fit whole under every one of them**. Four of the seven
+strategies were therefore returning the same thing — the entire passage — and
+collapsing into each other at dedup. `recursive` bottomed out at **96.9%
+duplicate, contributing 535 unique chunks out of 17k passages**. "Seven
+strategies" was true on paper and false in the index.
+
+Retuning every ceiling to the measured distribution (roughly 3× smaller) is
+what makes each strategy actually cut where its own rule says it should:
+
+| strategy | unique before | unique after |
+|---|---:|---:|
+| `recursive` | 535 | **13,550** |
+| `parent_child` | 19,132 | **34,182** |
+| `fixed` | 18,412 | 23,703 |
+
+A related trap worth naming: `default_chunkers()` passed sizes as constructor
+arguments, silently shadowing the tuned dataclass defaults. The retune had no
+effect on three strategies until those literals were removed — the real
+configuration lived in two places and the wrong one won.
 
 **Deduplication turns overlap into signal.** Seven strategies over one passage
 produce near-identical spans; indexing all of them would inflate the index and
@@ -82,27 +109,30 @@ normalised content and records *every* strategy that produced each survivor —
 text that several independent strategies agree is a coherent unit is a better
 retrieval target, exposed to the reranker as a `provenance` feature.
 
-Measured over 17,917 passages (Hindi + Bengali + Tamil + their English sources):
+Measured over the shipped index — 11,960 passages (Hindi + Bengali + Tamil and
+their English sources):
 
 | strategy | produced | unique | duplicate |
 |---|---:|---:|---:|
-| `proposition` | 59,776 | 14,942 | 75.0% |
-| `sentence_window` | 58,085 | 49,648 | 14.5% |
-| `parent_child` | 51,628 | 46,749 | 9.5% |
-| `metadata_aware` | 30,038 | 11,489 | 61.8% |
-| `semantic` | 29,608 | 10,067 | 66.0% |
-| `fixed` | 25,495 | 25,150 | 1.4% |
-| `recursive` | 20,975 | 8,542 | 59.3% |
-| **total** | **275,605** | **166,587** | **39.6%** |
+| `parent_child` | 35,864 | 34,182 | 4.7% |
+| `sentence_window` | 32,770 | 27,876 | 14.9% |
+| `fixed` | 24,103 | 23,703 | 1.7% |
+| `recursive` | 17,669 | 13,550 | 23.3% |
+| `metadata_aware` | 24,022 | 11,645 | 51.5% |
+| `proposition` | 38,456 | 9,928 | 74.2% |
+| `semantic` | 21,291 | 6,488 | 69.5% |
+| **total** | **194,175** | **127,372** | **34.4%** |
 
 **Read that table carefully — "unique" is order-dependent.** Strategies run in
-list order and whoever gets to a shared span first claims it, so `fixed`
-scoring 1.4% duplicate means only that it ran first, not that it is the
-strongest strategy. The meaningful figures are the union (166,587 chunks, 9.3
-per passage) and the 39.6% collapse rate, which is what the provenance feature
-is built from.
+list order and whoever reaches a shared span first claims it, so `fixed`
+scoring 1.7% duplicate means only that it ran early, not that it is the
+strongest strategy. The meaningful figures are the union (127,372 chunks, 10.6
+per passage) and the 34.4% collapse rate, which is what the provenance feature
+is built from. `proposition` and `semantic` show high duplicate rates because
+their units genuinely coincide with sentences much of the time — that is the
+agreement signal, not waste.
 
-Chunking runs at ~110 passages/s including the semantic strategy's embedding
+Chunking runs at ~90 passages/s including the semantic strategy's embedding
 pass. That is offline and amortised; only the query-time re-chunk is inside the
 latency budget.
 
@@ -149,6 +179,48 @@ Tamil barely benefits — e5's Tamil coverage is genuinely weaker. That is
 reported per language rather than averaged away, and it is why the abstention
 rail matters: on Tamil the system declines more often, which is the correct
 behaviour when retrieval is weak.
+
+### The bug that silently broke every non-English language
+
+Python's `\w` matches Unicode *letters* but not combining *marks*. Indic
+scripts write vowels as marks attached to consonants, so a plain `\w+` breaks
+at every matra:
+
+```
+tokenize("कॉर्पोरेशन क्या है?")  ->  ['क','र','प','र','शन','क','य','ह']
+tokenize("சிப்சா என்றால் என்ன")   ->  ['ச','ப','ச','என','ற','ல','என','ன']
+```
+
+Words were being shredded into consonant fragments. Nothing errored. The
+damage ran through everything lexical — BM25, corpus IDF, the reranker's
+`coverage` and `phrase` features, the grounding check, extractive span
+scoring, and chunk sizing — for **three of the four languages in the corpus**.
+
+It surfaced only because a Hindi question that the corpus demonstrably covers
+came back as `abstain_no_evidence`. Symptoms that had looked like separate
+problems turned out to be this one bug:
+
+- the reranker fitting `coverage = -1.398` (penalising chunks containing the
+  query's rare terms) and scoring **0.501 held-out — exactly chance**;
+- Indic chunks sized by fragment counts, so every ceiling tripped ~3× early;
+- the extractive answerer unable to score any Indic evidence.
+
+The fix is a character class that includes the Indic blocks and Latin
+diacritics. Regression tests now cover all three scripts, and the reranker
+went from 0.501 to 0.561 held-out on the next build.
+
+### Answering in the language the question was asked in
+
+MSMARCO-XI translates every passage into every language, so near-identical
+translations sit adjacent in embedding space and retrieval picks among them
+arbitrarily. Measured: only **22%** of queries got a same-language top hit.
+
+This is a product decision, not something to learn — `is_selected` says nothing
+about what language the reader speaks — so it is applied as an explicit
+preference over ranked candidates (`script_detect.py`, Unicode-block counting,
+microseconds) rather than as a reranker feature. The bonus is deliberately
+small: a correct answer in the wrong language still beats a wrong answer in the
+right one.
 
 ---
 
