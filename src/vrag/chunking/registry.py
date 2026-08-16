@@ -105,6 +105,14 @@ def chunk_passages(
     """Fan every passage through every strategy, then deduplicate."""
     chunkers = list(chunkers) if chunkers is not None else default_chunkers(encode)
 
+    # Let embedding-dependent chunkers batch their encoding across the whole
+    # corpus before the per-passage loop starts. Encoding six sentences at a
+    # time, once per passage, was the dominant cost of the entire build.
+    for chunker in chunkers:
+        prime = getattr(chunker, "prime", None)
+        if callable(prime):
+            prime(passages)
+
     produced: Counter = Counter()
     survived: Counter = Counter()
     by_key: dict[str, Chunk] = {}

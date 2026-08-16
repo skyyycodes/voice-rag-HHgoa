@@ -47,7 +47,35 @@ class SemanticChunker:
     # shouldn't trigger a cut; a genuine topic shift moves several in a row.
     smooth: bool = True
     name: str = "semantic"
-    _buf: list = field(default_factory=list, repr=False)
+    # Sentence vectors precomputed by `prime`, keyed by passage id.
+    _cache: dict = field(default_factory=dict, repr=False)
+
+    def prime(self, passages) -> None:
+        """Encode every passage's sentences in one batched pass.
+
+        Without this, `split` encodes each passage's ~6 sentences on its own,
+        so a corpus-wide build makes tens of thousands of tiny inference calls
+        whose per-call overhead dwarfs the actual work — it was by far the
+        slowest phase of the build. Collecting all sentences first turns that
+        into a handful of large batches, which the encoder can also length-sort.
+
+        Falls back silently: a passage missing from the cache is encoded on
+        demand in `split`, so priming is an optimisation, not a precondition.
+        """
+        flat: list[str] = []
+        slices: list[tuple[str, int, int]] = []
+        for passage in passages:
+            sentences = [s[2] for s in _sentence_spans(passage.text)]
+            if len(sentences) < 2:
+                continue
+            slices.append((passage.passage_id, len(flat), len(flat) + len(sentences)))
+            flat.extend(sentences)
+
+        if not flat:
+            return
+        vectors = self.encode(flat)
+        for passage_id, start, end in slices:
+            self._cache[passage_id] = vectors[start:end]
 
     def split(self, text: str, meta: ChunkMeta) -> list[Chunk]:
         spans = _sentence_spans(text)
@@ -58,7 +86,9 @@ class SemanticChunker:
             return [make_chunk(body, body, meta, self.name, 0, len(text))]
 
         sentences = [s[2] for s in spans]
-        vecs = self.encode(sentences)
+        vecs = self._cache.get(meta.passage_id)
+        if vecs is None or len(vecs) != len(sentences):
+            vecs = self.encode(sentences)
         norms = np.linalg.norm(vecs, axis=1, keepdims=True)
         norms[norms == 0] = 1.0
         vecs = vecs / norms
