@@ -200,7 +200,6 @@ class HybridRetriever:
                 phrase,
                 0.05 * min(3, n_strat - 1),
                 length,
-                1.0 if self.store.is_selected[cand.idx] else 0.0,
             )
         return out
 
