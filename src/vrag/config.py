@@ -87,7 +87,7 @@ class Settings(BaseSettings):
     # 200ms target. "llm" is available through the same harness contract.
     answer_mode: str = "extractive"  # extractive | llm
     anthropic_api_key: str = ""
-    llm_model: str = "claude-sonnet-5"
+    llm_model: str = "claude-opus-5"
     llm_timeout_s: float = 20.0
 
     @property
