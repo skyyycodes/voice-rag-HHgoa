@@ -98,7 +98,9 @@ class LexicalIndex:
             ids.append(row)
 
         retriever = bm25s.BM25()
-        retriever.index(bm25s.tokenization.Tokenized(ids=ids, vocab=vocab))
+        retriever.index(
+            bm25s.tokenization.Tokenized(ids=ids, vocab=vocab), show_progress=False
+        )
         return cls(retriever, vocab)
 
     def search(self, query: str, k: int) -> tuple[np.ndarray, np.ndarray]:
