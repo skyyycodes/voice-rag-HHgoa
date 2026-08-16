@@ -22,9 +22,9 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import settings
+from .guardrails.input_rails import normalise
 from .harness.contracts import QueryRequest, QueryResponse
 from .harness.orchestrator import Pipeline
-from .guardrails.input_rails import normalise
 from .index.hybrid import HybridRetriever
 from .script_detect import detect_script
 from .stt import build_transcribers
