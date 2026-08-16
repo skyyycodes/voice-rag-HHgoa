@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-# Push this repo to a Hugging Face Space (Docker SDK).
+# Push this repo to a Hugging Face Space (Gradio SDK).
+#
+# Docker Spaces are a paid feature, so the deployed demo runs on the free Gradio
+# SDK. Only the presentation layer differs — `app.py` calls the same Pipeline
+# in-process that `vrag.server` serves over HTTP.
 #
 #   ./deploy/push_to_space.sh <hf-username> <space-name>
 #
@@ -27,9 +31,10 @@ git lfs install --local
 
 # The Space's README front-matter is its configuration — sdk, port, title.
 cp "$REPO_ROOT/deploy/README_SPACE.md" README.md
-cp "$REPO_ROOT/Dockerfile" "$REPO_ROOT/pyproject.toml" .
-rm -rf src web data && mkdir -p data
-cp -r "$REPO_ROOT/src" "$REPO_ROOT/web" .
+cp "$REPO_ROOT/app.py" "$REPO_ROOT/requirements.txt" "$REPO_ROOT/pyproject.toml" .
+rm -rf src data scripts && mkdir -p data
+cp -r "$REPO_ROOT/src" .
+cp -r "$REPO_ROOT/scripts" .
 cp -r "$REPO_ROOT/data/index" data/index
 
 cat > .gitattributes <<'EOF'
@@ -55,8 +60,11 @@ git push -f https://huggingface.co/spaces/"$USER"/"$SPACE" HEAD:main
 cat <<EOF
 
 Done. Next:
-  1. Space → Settings → Variables and secrets → add SARVAM_API_KEY
+  1. Space -> Settings -> Variables and secrets -> add SARVAM_API_KEY
      (and ANTHROPIC_API_KEY if you want the LLM answer path)
-  2. Wait for the build, then open:
+     Without SARVAM_API_KEY the microphone is disabled; text still works.
+  2. Watch the build logs, then open:
      https://huggingface.co/spaces/$USER/$SPACE
+  3. Verify on the deployed box (2 vCPU, not your laptop):
+     the per-stage table should still show pipeline < 200ms.
 EOF

@@ -11,6 +11,7 @@ dependencies = [
     "anthropic>=0.122.0",
     "bm25s>=0.3.10",
     "fastapi>=0.141.1",
+    "gradio>=6.24.0",
     "httpx>=0.28.1",
     "huggingface-hub>=1.27.0",
     "numpy>=2.5.2",
