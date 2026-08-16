@@ -82,9 +82,29 @@ normalised content and records *every* strategy that produced each survivor —
 text that several independent strategies agree is a coherent unit is a better
 retrieval target, exposed to the reranker as a `provenance` feature.
 
-Per-strategy "unique" counts are order-dependent (whoever runs first claims a
-shared chunk), so the build reports them as union coverage rather than implying
-a ranking.
+Measured over 17,917 passages (Hindi + Bengali + Tamil + their English sources):
+
+| strategy | produced | unique | duplicate |
+|---|---:|---:|---:|
+| `proposition` | 59,776 | 14,942 | 75.0% |
+| `sentence_window` | 58,085 | 49,648 | 14.5% |
+| `parent_child` | 51,628 | 46,749 | 9.5% |
+| `metadata_aware` | 30,038 | 11,489 | 61.8% |
+| `semantic` | 29,608 | 10,067 | 66.0% |
+| `fixed` | 25,495 | 25,150 | 1.4% |
+| `recursive` | 20,975 | 8,542 | 59.3% |
+| **total** | **275,605** | **166,587** | **39.6%** |
+
+**Read that table carefully — "unique" is order-dependent.** Strategies run in
+list order and whoever gets to a shared span first claims it, so `fixed`
+scoring 1.4% duplicate means only that it ran first, not that it is the
+strongest strategy. The meaningful figures are the union (166,587 chunks, 9.3
+per passage) and the 39.6% collapse rate, which is what the provenance feature
+is built from.
+
+Chunking runs at ~110 passages/s including the semantic strategy's embedding
+pass. That is offline and amortised; only the query-time re-chunk is inside the
+latency budget.
 
 ---
 
