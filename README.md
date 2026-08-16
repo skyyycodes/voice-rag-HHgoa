@@ -480,6 +480,43 @@ real traffic: **1 false rejection in 263 held-out MS MARCO queries**, while
 correctly allowing "how much does my dog need to eat", "what is my credit
 score", and "my heart rate is 120 what does that mean".
 
+### Scaling the corpus 4x made retrieval worse
+
+The obvious way to improve recall is more corpus, so it was tried: 47,737
+passages and **485,043 chunks**, 3.8x the shipped index. It is worse on every
+retrieval metric.
+
+| | 127k chunks (shipped) | 485k chunks |
+|---|---:|---:|
+| Recall@1 | **0.151** | 0.092 |
+| Recall@5 | **0.303** | 0.193 |
+| MRR@5 | **0.206** | 0.127 |
+| answered and cited gold | **10.3%** | 8.5% |
+| P50 latency | **57 ms** | 71 ms |
+| index size | **101 MB** | 386 MB |
+
+The haystack grows faster than the signal. Each query's gold set is fixed — one
+or two labelled passages, so 10-20 chunks — while the distractors competing for
+the same five slots quadruple. Absolute recall@k falls even though the system
+holds strictly more knowledge. It is a real effect, not sampling noise: R@5
+nearly halves.
+
+Two things that *did* improve at 4x, and are the reason the run is kept in
+`bench/results/`:
+
+- **The out-of-domain rail got better** — 50% -> 75% catch at the same
+  false-decline budget, because broader coverage lifts in-domain relevance
+  logits and separates the two populations further. That gain does not transfer
+  back to the smaller index; recalibrating on it returns 50%.
+- **The reranker's generalisation gate fired on its own.** At 4x the linear
+  reranker fell to **0.430 held-out pairwise accuracy — below chance** — and
+  the build discarded it for RRF-only ordering without being asked. The guard
+  added earlier caught a real regression on real data.
+
+Shipped configuration is the 127k index: better retrieval, a quarter of the
+size, and faster. The larger run is archived rather than deleted, because "we
+tried more data and it hurt" is a result.
+
 ### The weakest number
 
 **The system answers 98.8% of queries but cites a gold-labelled passage only
