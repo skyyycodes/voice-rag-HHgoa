@@ -36,7 +36,6 @@ def _span_score(
     q_idf: dict[str, float],
     sentence: str,
     position: int,
-    n_sentences: int,
 ) -> float:
     """Score one candidate sentence against the query."""
     s_tokens = tokenize(sentence)
@@ -44,7 +43,7 @@ def _span_score(
         return 0.0
     s_set = set(s_tokens)
 
-    overlap = sum(q_idf.get(t, 1.0) for t in q_set_intersect(q_tokens, s_set))
+    overlap = sum(q_idf.get(t, 1.0) for t in (q_tokens & s_set))
     total = sum(q_idf.get(t, 1.0) for t in q_tokens) or 1.0
     coverage = overlap / total
 
@@ -58,10 +57,6 @@ def _span_score(
     position_prior = 1.0 - 0.06 * min(position, 4)
 
     return coverage * length_fit * position_prior
-
-
-def q_set_intersect(a: set[str], b: set[str]) -> set[str]:
-    return a & b
 
 
 def answer_extractive(
@@ -80,7 +75,16 @@ def answer_extractive(
     q_idf = {t: idf.get(t, 1.0) for t in q_tokens}
 
     best: tuple[float, Candidate, str, int, int] | None = None
-    for cand in candidates:
+    n = len(candidates)
+    for rank, cand in enumerate(candidates):
+        # Retrieval rank is evidence too: a great sentence inside a poorly
+        # matched passage is usually a coincidence of shared vocabulary.
+        # Computed from enumerate rather than `candidates.index(cand)` — the
+        # latter is O(n^2) and invokes the dataclass `__eq__`, which compares
+        # the numpy feature vectors and raises on an ambiguous truth value the
+        # moment two candidates share a prefix of scalar fields.
+        rank_weight = 1.0 + 0.15 * max(0.0, 1.0 - rank / max(1, n))
+
         # Re-chunk the retrieved context at query time. Retrieval returns
         # parent blocks for the small-to-big strategies, and quoting a whole
         # parent block back at the user is not an answer.
@@ -92,10 +96,7 @@ def answer_extractive(
                 start = cursor
             cursor = start + len(sentence)
 
-            score = _span_score(q_tokens, q_idf, sentence, position, len(sentences))
-            # Retrieval rank is evidence too: a great sentence inside a poorly
-            # matched passage is usually a coincidence of shared vocabulary.
-            score *= 1.0 + 0.15 * _rank_bonus(candidates, cand)
+            score = _span_score(q_tokens, q_idf, sentence, position) * rank_weight
             if best is None or score > best[0]:
                 best = (score, cand, sentence, start, start + len(sentence))
 
@@ -121,15 +122,6 @@ def answer_extractive(
         span_end=end,
     )
     return Answer(text=text.strip(), citations=[citation], mode="extractive")
-
-
-def _rank_bonus(candidates: list[Candidate], cand: Candidate) -> float:
-    """1.0 for the top-ranked candidate, decaying to 0."""
-    try:
-        rank = candidates.index(cand)
-    except ValueError:
-        return 0.0
-    return max(0.0, 1.0 - rank / max(1, len(candidates)))
 
 
 def _expand(

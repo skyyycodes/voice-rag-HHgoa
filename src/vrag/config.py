@@ -4,14 +4,26 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
 class Settings(BaseSettings):
+    # Every setting is namespaced `VRAG_*`. Without a prefix these bind to bare
+    # names like `LANGUAGES` and `ONNX_THREADS`, which collide with unrelated
+    # environment variables — and, worse, made every `VRAG_*` override in the
+    # Dockerfile and docs silently do nothing.
+    #
+    # The third-party credentials are the deliberate exception: they accept
+    # their conventional unprefixed names too, since that is what the providers
+    # document and what a deploy platform's secret UI will be set to.
     model_config = SettingsConfigDict(
-        env_file=REPO_ROOT / ".env", env_file_encoding="utf-8", extra="ignore"
+        env_file=REPO_ROOT / ".env",
+        env_file_encoding="utf-8",
+        env_prefix="VRAG_",
+        extra="ignore",
     )
 
     # ---- paths -------------------------------------------------------------
@@ -75,9 +87,13 @@ class Settings(BaseSettings):
 
     # ---- speech to text ----------------------------------------------------
     stt_provider: str = "sarvam"  # sarvam | elevenlabs
-    sarvam_api_key: str = ""
+    sarvam_api_key: str = Field(
+        default="", validation_alias=AliasChoices("VRAG_SARVAM_API_KEY", "SARVAM_API_KEY")
+    )
     sarvam_model: str = "saaras:v3"  # verified against the live API
-    elevenlabs_api_key: str = ""
+    elevenlabs_api_key: str = Field(
+        default="", validation_alias=AliasChoices("VRAG_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
+    )
     elevenlabs_model: str = "scribe_v1"
     stt_timeout_s: float = 12.0
     stt_max_retries: int = 2
@@ -86,7 +102,9 @@ class Settings(BaseSettings):
     # "extractive" is the default fast path and the one benchmarked against the
     # 200ms target. "llm" is available through the same harness contract.
     answer_mode: str = "extractive"  # extractive | llm
-    anthropic_api_key: str = ""
+    anthropic_api_key: str = Field(
+        default="", validation_alias=AliasChoices("VRAG_ANTHROPIC_API_KEY", "ANTHROPIC_API_KEY")
+    )
     llm_model: str = "claude-opus-5"
     llm_timeout_s: float = 20.0
 
