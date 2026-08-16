@@ -26,15 +26,19 @@ schedules against.
 from __future__ import annotations
 
 import threading
+import time
 
 import numpy as np
 
 from ..config import Settings, settings
 
-# Measured *in-pipeline*, not standalone: two ONNX sessions share the machine,
-# so a pair costs ~5.5ms here against ~3.5ms for the reranker running alone.
-# Budgeting with the standalone figure would consistently overshoot.
-_MS_PER_PAIR = 5.5
+# Starting estimate only. The real figure is measured on the machine the
+# process is actually running on — see `CrossEncoderReranker.calibrate`.
+# A constant baked in from a 10-core laptop would be badly wrong on the 2-vCPU
+# container this deploys to, and the budget maths depends on it: too optimistic
+# and every request overshoots the deadline, too pessimistic and the reranker
+# never runs.
+_MS_PER_PAIR_DEFAULT = 3.5
 # Below this many milliseconds of remaining budget, skip reranking entirely
 # rather than half-run it and blow the deadline.
 _MIN_VIABLE_MS = 12.0
@@ -71,6 +75,7 @@ class CrossEncoderReranker:
             model_path, opts, providers=["CPUExecutionProvider"]
         )
         self._input_names = {i.name for i in self.session.get_inputs()}
+        self.ms_per_pair = _MS_PER_PAIR_DEFAULT
 
     def score(self, query: str, docs: list[str]) -> np.ndarray:
         """Relevance logit per (query, doc) pair. Higher is more relevant."""
@@ -91,6 +96,31 @@ class CrossEncoderReranker:
         return self.session.run(None, feed)[0].ravel().astype(np.float32)
 
 
+    def calibrate(self, cfg: Settings = settings) -> float:
+        """Time this machine, and set the per-pair cost the budget maths uses.
+
+        Called once at startup. Development happened on a 10-core laptop and
+        this deploys to a 2-vCPU container, where the same model is several
+        times slower — a hard-coded constant would either blow every deadline
+        or disable reranking entirely. Measuring turns the latency budget into
+        something that holds on hardware nobody profiled in advance.
+        """
+        probe_q = "what is a corporation"
+        probe_d = ["A corporation is a company authorized to act as a legal entity."] * 8
+        self.score(probe_q, probe_d[:2])  # warm the graph; discard
+
+        best = float("inf")
+        for _ in range(3):
+            started = time.perf_counter()
+            self.score(probe_q, probe_d)
+            best = min(best, (time.perf_counter() - started) * 1000 / len(probe_d))
+
+        # Probe pairs are short; real ones are longer and land in a busier
+        # process, so bias the estimate upward rather than under-reserving.
+        self.ms_per_pair = max(_MS_PER_PAIR_DEFAULT, best * cfg.rerank_calibration_slack)
+        return self.ms_per_pair
+
+
 def depth_for_budget(remaining_ms: float, cfg: Settings = settings) -> int:
     """How many candidates can be reranked in the time that is left.
 
@@ -103,7 +133,8 @@ def depth_for_budget(remaining_ms: float, cfg: Settings = settings) -> int:
     usable = remaining_ms - cfg.budget_generate_ms - cfg.budget_guardrail_out_ms
     if usable < _MIN_VIABLE_MS:
         return 0
-    return int(min(cfg.rerank_depth, max(0, usable / _MS_PER_PAIR)))
+    per_pair = _reranker.ms_per_pair if _reranker is not None else _MS_PER_PAIR_DEFAULT
+    return int(min(cfg.rerank_depth, max(0, usable / per_pair)))
 
 
 _reranker: CrossEncoderReranker | None = None

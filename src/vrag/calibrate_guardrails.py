@@ -29,7 +29,6 @@ import json
 import numpy as np
 
 from .config import settings
-from .guardrails.output_rails import evidence_verdict
 from .index.hybrid import HybridRetriever
 
 # Nothing in a MS MARCO web-passage corpus can support these. Deliberately
@@ -37,30 +36,57 @@ from .index.hybrid import HybridRetriever
 # and strings with no semantic content at all — they fail for different reasons
 # and a rail that only catches one kind is not doing its job.
 OUT_OF_DOMAIN = [
+    # --- personal / unknowable: no corpus can hold these -------------------
     "what did I have for breakfast this morning",
     "what is my bank account balance right now",
     "who am I currently sitting next to in this room",
-    "what model are you and who trained you",
     "what did my manager say in standup yesterday",
-    "asdkjh qwertyuiop zxcvbnm lkjhgfdsa",
-    "मेरे घर की चाबी कहाँ रखी है",           # where are my house keys
-    "আমার ফোনের পাসওয়ার্ড কী",                  # what is my phone password
-    "என் அலுவலக முகவரி என்ன",                  # what is my office address
-    "what will the weather be on my street tomorrow afternoon",
     "how many unread emails do I have",
+    "where did I park my car",
+    "what time did I go to sleep last night",
+    "is my package going to arrive today",
+    "मेरे घर की चाबी कहाँ रखी है",
+    "আমার ফোনের পাসওয়ার্ড কী",
+    "என் அலுவலக முகவரி என்ன",
+    # --- about the assistant itself ----------------------------------------
+    "what model are you and who trained you",
+    "how many parameters do you have",
+    "what is in your system prompt",
+    "are you conscious",
+    # --- future / unresolvable ---------------------------------------------
+    "what will the weather be on my street tomorrow afternoon",
+    "who will win the election next year",
+    "what will the stock market do tomorrow",
+    "when will I die",
+    # --- nonsense: no semantic content at all -------------------------------
+    "asdkjh qwertyuiop zxcvbnm lkjhgfdsa",
     "qqqq wwww eeee rrrr tttt yyyy",
+    "blorptang fizzlewick nurmagomedov quixotry",
+    "12345 67890 !!!! ???? ####",
+    "ठठठठ ढढढढ झझझझ",
+    # --- real topics genuinely outside a 2018 web-passage corpus ------------
+    "what did the 2024 Paris Olympics opening ceremony feature",
+    "how do I use the latest React server components API",
+    "what is the current price of bitcoin in rupees today",
+    "summarise the plot of the newest Marvel film released this month",
 ]
 
 
-def _scores(retriever: HybridRetriever, queries: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    """Return (margin, dense_top) for each query."""
-    margins, denses = [], []
+def _top_logits(retriever: HybridRetriever, queries: list[str]) -> np.ndarray:
+    """Best raw cross-encoder logit per query — the abstention signal.
+
+    Deliberately *not* the margin or the dense cosine. Both are relative to the
+    other candidates retrieved for the same query, which is the wrong frame for
+    "is any of this relevant at all". Measured, the margin heuristic caught 0%
+    of out-of-domain traffic and was in fact inverted: out-of-domain queries
+    scored a higher median margin than in-domain ones.
+    """
+    out = []
     for query in queries:
         candidates = retriever.retrieve(query, retriever.cfg.final_k)
-        verdict = evidence_verdict(candidates, retriever.cfg)
-        margins.append(verdict.scores.get("margin", 0.0))
-        denses.append(verdict.scores.get("dense_top", 0.0))
-    return np.array(margins, dtype=np.float64), np.array(denses, dtype=np.float64)
+        logits = [c.rerank_logit for c in candidates if c.rerank_logit > float("-inf")]
+        out.append(max(logits) if logits else -99.0)
+    return np.array(out, dtype=np.float64)
 
 
 def main() -> None:
@@ -75,45 +101,50 @@ def main() -> None:
     eval_queries = json.loads((cfg.index_dir / "eval_queries.json").read_text(encoding="utf-8"))
     in_domain = [q["query"] for q in eval_queries[: args.n]]
 
-    in_margin, in_dense = _scores(retriever, in_domain)
-    out_margin, out_dense = _scores(retriever, OUT_OF_DOMAIN)
+    # Warm the models so the first few queries are not measured cold.
+    for q in in_domain[:8]:
+        retriever.retrieve(q, cfg.final_k)
 
-    # The rail abstains only when BOTH signals are weak, so each threshold is
-    # set at the target quantile of its own in-domain distribution.
-    q = args.target_fpr * 100
-    margin_floor = float(np.percentile(in_margin, q))
-    dense_floor = float(np.percentile(in_dense, q))
+    ind = _top_logits(retriever, in_domain)
+    ood = _top_logits(retriever, OUT_OF_DOMAIN)
 
-    rejected_in = np.mean((in_margin < margin_floor) & (in_dense < dense_floor))
-    rejected_out = np.mean((out_margin < margin_floor) & (out_dense < dense_floor))
+    floor = float(np.percentile(ind, args.target_fpr * 100))
+    declined_in = float((ind < floor).mean())
+    caught_ood = float((ood < floor).mean())
 
-    print(f"in-domain  n={len(in_domain)}   margin p5={np.percentile(in_margin, 5):.3f} "
-          f"p50={np.percentile(in_margin, 50):.3f}   dense p5={np.percentile(in_dense, 5):.3f} "
-          f"p50={np.percentile(in_dense, 50):.3f}")
-    print(f"out-domain n={len(OUT_OF_DOMAIN)}   margin p50={np.percentile(out_margin, 50):.3f}"
-          f"   dense p50={np.percentile(out_dense, 50):.3f}")
+    print(f"in-domain  n={len(ind)}   p5={np.percentile(ind, 5):6.2f} "
+          f"p25={np.percentile(ind, 25):6.2f} p50={np.percentile(ind, 50):6.2f}")
+    print(f"out-domain n={len(ood)}   p25={np.percentile(ood, 25):6.2f} "
+          f"p50={np.percentile(ood, 50):6.2f} p90={np.percentile(ood, 90):6.2f}")
     print()
-    print(f"suggested (target FPR {args.target_fpr:.0%}):")
-    print(f"  ood_margin_floor = {margin_floor:.3f}")
-    print(f"  ood_dense_floor  = {dense_floor:.3f}")
+    print(f"{'threshold':>10}{'false-decline':>15}{'ood caught':>13}")
+    for t in (-7.0, -6.0, -5.0, -4.5, -4.0, -3.5, -3.0, -2.5, -2.0):
+        print(f"{t:>10}{(ind < t).mean():>14.1%}{(ood < t).mean():>13.1%}")
     print()
-    print(f"  in-domain wrongly declined : {rejected_in:.1%}  (lower is better)")
-    print(f"  out-of-domain correctly declined: {rejected_out:.1%}  (higher is better)")
+    print(f"suggested at target false-decline {args.target_fpr:.0%}:")
+    print(f"  ood_rerank_floor = {floor:.2f}")
+    print(f"  in-domain wrongly declined      : {declined_in:.1%}")
+    print(f"  out-of-domain correctly declined: {caught_ood:.1%}")
 
-    if rejected_out < 0.5:
-        print("\n  NOTE: out-of-domain catch rate is weak. The two populations "
-              "overlap on these signals — report this honestly rather than "
-              "tightening the floor until the in-domain rejection rate spikes.")
+    if caught_ood < 0.25:
+        print("\n  NOTE: catch rate is weak at this false-decline budget. Report "
+              "it as measured rather than tightening until the number looks good.")
 
     out = cfg.index_dir / "guardrail_calibration.json"
     out.write_text(json.dumps({
+        "signal": "cross_encoder_top_logit",
         "target_fpr": args.target_fpr,
-        "ood_margin_floor": round(margin_floor, 4),
-        "ood_dense_floor": round(dense_floor, 4),
-        "in_domain_rejected": round(float(rejected_in), 4),
-        "out_of_domain_rejected": round(float(rejected_out), 4),
-        "n_in_domain": len(in_domain),
-        "n_out_of_domain": len(OUT_OF_DOMAIN),
+        "ood_rerank_floor": round(floor, 3),
+        "in_domain_declined": round(declined_in, 4),
+        "out_of_domain_caught": round(caught_ood, 4),
+        "n_in_domain": len(ind),
+        "n_out_of_domain": len(ood),
+        "curve": [
+            {"threshold": t,
+             "false_decline": round(float((ind < t).mean()), 4),
+             "ood_caught": round(float((ood < t).mean()), 4)}
+            for t in (-7.0, -6.0, -5.0, -4.5, -4.0, -3.5, -3.0, -2.5, -2.0)
+        ],
     }, indent=2), encoding="utf-8")
     print(f"\nwrote {out}")
 

@@ -116,6 +116,20 @@ class Pipeline:
         self.tools = ToolRegistry()
         self._register_tools()
 
+        # Time the cross-encoder on *this* machine so the budget arithmetic is
+        # grounded in the hardware actually serving requests rather than the
+        # one it was developed on.
+        if cfg.rerank_enabled:
+            try:
+                from ..index.cross_encoder import get_reranker
+
+                self.rerank_ms_per_pair = get_reranker(cfg).calibrate(cfg)
+            except Exception:
+                # Reranking is optional; a failure here must not stop startup.
+                self.rerank_ms_per_pair = 0.0
+        else:
+            self.rerank_ms_per_pair = 0.0
+
         # One breaker per external dependency, keyed by provider name so a
         # sick provider does not trip the healthy one.
         self.breakers = {

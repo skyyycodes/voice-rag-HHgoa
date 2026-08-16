@@ -47,6 +47,31 @@ def evidence_verdict(
             triggered=["empty_candidates"],
         )
 
+    # Prefer the cross-encoder's raw logit when it ran. It is the only
+    # absolute relevance signal available — everything else in the pipeline is
+    # relative to the other candidates for the same query, which is exactly the
+    # wrong frame for "is any of this relevant at all?".
+    #
+    # The margin heuristic below was measured at a 0.0% out-of-domain catch
+    # rate, and worse, it is *inverted*: out-of-domain queries score a HIGHER
+    # median margin (2.957) than in-domain ones (1.979), because retrieval
+    # surfaces one weak match against noise while a covered question surfaces
+    # several comparable ones. Relative spread cannot answer this question.
+    logits = [c.rerank_logit for c in candidates if c.rerank_logit > float("-inf")]
+    if logits:
+        best_logit = max(logits)
+        if best_logit < cfg.ood_rerank_floor:
+            return GuardVerdict(
+                allowed=False,
+                decision=Decision.REJECT_OFF_TOPIC,
+                reason=(
+                    "Nothing in the indexed corpus is relevant enough to this "
+                    "question to answer from."
+                ),
+                triggered=["low_rerank_relevance"],
+                scores={"rerank_logit": best_logit},
+            )
+
     scores = np.array([c.score for c in candidates], dtype=np.float32)
     top = float(scores[0])
 

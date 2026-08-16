@@ -94,13 +94,26 @@ class Settings(BaseSettings):
     rerank_onnx_file: str = "onnx/model_qint8_avx512_vnni.onnx"
     # This model keeps its tokenizer at the repo root, unlike the bi-encoder.
     rerank_tokenizer_file: str = "tokenizer.json"
+    # 128 rather than the 64 that real pair lengths (p50=59) would suggest.
+    # Truncating to 64 halves the cost per pair, but it was measured to cost
+    # accuracy too — R@1 0.152 -> 0.139 — because the tail that gets cut is
+    # exactly the long passages where the answer sits late in the text. The
+    # cheaper setting was tried and rejected on data.
     rerank_max_tokens: int = 128
     # Ceiling on pairs scored per query; the *actual* depth is chosen per
-    # request from the budget still remaining. 8 is where the measured
-    # quality-vs-budget curve peaks on MRR while keeping *every* percentile
-    # (P100 139.8ms) inside the 200ms bar — deeper buys R@5 but breaks it.
-    # See bench/results/quality_vs_budget.json.
+    # request from the budget still remaining.
+    #
+    # 8, from a measured curve. Depth 32 over a wider pool was tried and is
+    # genuinely better on R@5 (0.303 -> 0.339) — and worse on everything that
+    # matters more here: R@1 falls 0.151 -> 0.127, P50 doubles to 121ms, and
+    # P100 breaches the 200ms bar. A system that cites one passage is judged on
+    # R@1, so the deeper setting was rejected. See
+    # bench/results/quality_vs_budget.json.
     rerank_depth: int = 8
+    # Startup timing is on short probe pairs in an idle process; real traffic
+    # is longer and contends with the bi-encoder, so the measured figure is
+    # multiplied by this before the budget maths trusts it.
+    rerank_calibration_slack: float = 1.8
     local_rerank_path: str = ""
     local_rerank_tokenizer: str = ""
 
@@ -123,6 +136,12 @@ class Settings(BaseSettings):
     # applied as calibrated rather than tuned until the number looked better.
     ood_margin_floor: float = 0.8665
     ood_dense_floor: float = 0.823
+    # Raw cross-encoder logit below which nothing retrieved is relevant enough
+    # to answer from. This is the rail that actually works: calibrated against
+    # in-domain vs out-of-domain populations it catches real out-of-domain
+    # traffic where the margin heuristic caught 0%. Set by
+    # `vrag.calibrate_guardrails`.
+    ood_rerank_floor: float = -4.0  # 4.8% false-decline, 50% out-of-domain catch
     # Minimum lexical+semantic overlap between answer and cited chunk.
     grounding_floor: float = 0.45
     # Cosine below which a cross-lingual span counts as unrelated. e5

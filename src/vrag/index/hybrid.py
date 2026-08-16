@@ -83,6 +83,12 @@ class Candidate:
     # on a different scale from the feature model's, and anything that reasons
     # about score *magnitudes* has to know which scale it is looking at.
     reranked: bool = False
+    # The cross-encoder's *raw* logit, before normalisation into the ranking
+    # band. Normalising is right for ordering and wrong for judging: the raw
+    # value is an absolute relevance statement ("this passage answers this
+    # question") and is the only signal in the pipeline that separates
+    # in-domain from out-of-domain traffic. The abstention rail reads it.
+    rerank_logit: float = float("-inf")
     features: np.ndarray = field(default_factory=lambda: np.zeros(len(FEATURES), dtype=np.float32))
 
 
@@ -230,6 +236,7 @@ class HybridRetriever:
         lo, hi = float(head_scores.min()), float(head_scores.max())
         span = (hi - lo) or 1.0
         for cand, raw in zip(head, head_scores):
+            cand.rerank_logit = float(raw)
             cand.score = 0.5 + 0.5 * (float(raw) - lo) / span
             cand.reranked = True
 
