@@ -101,9 +101,19 @@ async def voice(
     Base64 through the JSON endpoint would inflate the payload ~33% and add an
     encode/decode step on the critical path for no benefit.
     """
-    raw = await audio.read()
+    # Cap the read. This endpoint is public on a deployed Space and
+    # `await audio.read()` with no limit will happily pull a multi-gigabyte
+    # body into memory. Reading one byte past the limit is enough to detect
+    # and reject an oversized upload without buffering the rest.
+    limit = settings.max_audio_bytes
+    raw = await audio.read(limit + 1)
     if not raw:
         raise HTTPException(status_code=400, detail="Empty audio upload.")
+    if len(raw) > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Audio exceeds {limit // 1_000_000}MB. Send a shorter clip.",
+        )
 
     suffix = (audio.filename or "audio.wav").rsplit(".", 1)[-1].lower()
     fmt = suffix if suffix in {"wav", "mp3", "webm", "ogg", "flac"} else "webm"

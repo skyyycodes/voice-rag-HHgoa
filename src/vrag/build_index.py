@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import time
 from pathlib import Path
 
@@ -165,8 +166,12 @@ def main() -> None:
         "build_seconds": round(time.perf_counter() - t0, 1),
         "rerank": {
             "train_pair_acc": round(float(train_acc), 4),
-            "held_out_pair_acc": None if held_acc != held_acc else round(float(held_acc), 4),
-            "shipped": "learned" if held_acc == held_acc and held_acc >= cfg.rerank_min_held_out_acc else "rrf_only",
+            "held_out_pair_acc": None if math.isnan(held_acc) else round(float(held_acc), 4),
+            "shipped": (
+                "learned"
+                if not math.isnan(held_acc) and held_acc >= cfg.rerank_min_held_out_acc
+                else "rrf_only"
+            ),
         },
     }
     cfg.manifest.write_text(json.dumps(manifest, indent=2), encoding="utf-8")

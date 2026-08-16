@@ -79,6 +79,12 @@ class Span:
 class Telemetry:
     spans: list[Span] = field(default_factory=list)
     degraded: list[str] = field(default_factory=list)
+    # Budget accounting lives here rather than being threaded through every
+    # return: the pipeline has six exit points and only one of them used to
+    # report these, so an abstained request that *had* reranked reported a
+    # depth of zero.
+    rerank_depth: int = 0
+    budget_remaining_ms: float = 0.0
 
     def start(self, stage: str) -> Span:
         span = Span(stage=stage, started=time.perf_counter())
@@ -138,8 +144,16 @@ class Pipeline:
     ) -> list[Candidate]:
         return self.retriever.retrieve(query, k or self.cfg.final_k, remaining_ms)
 
-    def _tool_extractive(self, query: str, candidates: list[Candidate], query_type: str = "DESCRIPTION") -> Answer:
-        return answer_extractive(query, candidates, self.retriever.idf, query_type, self.cfg)
+    def _tool_extractive(
+        self,
+        query: str,
+        candidates: list[Candidate],
+        query_type: str = "DESCRIPTION",
+        remaining_ms: float | None = None,
+    ) -> Answer:
+        return answer_extractive(
+            query, candidates, self.retriever.idf, query_type, self.cfg, remaining_ms
+        )
 
     def _tool_guard_input(self, text: str):
         return check_input(text, self.cfg)
@@ -211,7 +225,8 @@ class Pipeline:
                 reason="Retrieval failed.", transcript=transcript,
             )
 
-        rerank_depth = getattr(self.retriever, "last_rerank_depth", 0)
+        tel.rerank_depth = getattr(self.retriever, "last_rerank_depth", 0)
+        tel.budget_remaining_ms = remaining
         if span.ms > self.cfg.budget_retrieve_ms:
             tel.degraded.append(f"retrieve_over_budget:{span.ms:.0f}ms")
 
@@ -256,7 +271,6 @@ class Pipeline:
             Decision.ANSWER, answer.text, tel, started,
             transcript=transcript, citations=answer.citations,
             mode=answer.mode, scores=out_verdict.scores,
-            rerank_depth=rerank_depth, budget_remaining=remaining,
         )
 
     # -- stage helpers -----------------------------------------------------
@@ -315,7 +329,12 @@ class Pipeline:
         sub-millisecond, and having it in hand means an LLM timeout degrades to
         a real answer instead of an error.
         """
-        extractive = self.tools.call("answer_extractive", query=query, candidates=candidates)
+        extractive = self.tools.call(
+            "answer_extractive",
+            query=query,
+            candidates=candidates,
+            remaining_ms=self.cfg.budget_total_ms - tel.pipeline_ms(),
+        )
 
         if mode != "llm" or self.llm_answerer is None:
             return extractive
@@ -357,8 +376,6 @@ class Pipeline:
         citations: list | None = None,
         mode: str = "extractive",
         scores: dict | None = None,
-        rerank_depth: int = 0,
-        budget_remaining: float = 0.0,
     ) -> QueryResponse:
         total = (time.perf_counter() - started) * 1000
         pipeline = tel.pipeline_ms()
@@ -378,6 +395,6 @@ class Pipeline:
             pipeline_ms=round(pipeline, 3),
             budget_exceeded=pipeline > self.cfg.budget_total_ms,
             degraded=tel.degraded,
-            rerank_depth=rerank_depth,
-            budget_remaining_ms=round(budget_remaining, 2),
+            rerank_depth=tel.rerank_depth,
+            budget_remaining_ms=round(tel.budget_remaining_ms, 2),
         )

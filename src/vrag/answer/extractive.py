@@ -96,6 +96,7 @@ def answer_extractive(
     idf: dict[str, float] | None = None,
     query_type: str = "DESCRIPTION",
     cfg: Settings = settings,
+    remaining_ms: float | None = None,
 ) -> Answer:
     """Pick the best supporting span across the retrieved candidates."""
     if not candidates:
@@ -110,7 +111,6 @@ def answer_extractive(
     # back at the user is not an answer.
     # (candidate, retrieval rank, sentence, position within its passage, start, end)
     spans: list[tuple[Candidate, int, str, int, int, int]] = []
-    n = len(candidates)
     for rank, cand in enumerate(candidates):
         cursor = 0
         for position, sentence in enumerate(split_sentences(cand.context)):
@@ -133,8 +133,13 @@ def answer_extractive(
     # practice means the evidence is in a different language from the question.
     # Always blending would cost the encode on every request and would let a
     # topically-similar sentence outrank one that literally contains the answer.
+    # The cross-lingual fallback is the single most expensive thing in this
+    # module (up to ~157ms at P100) and it is what pushed end-to-end latency
+    # past the 200ms bar. It only runs when there is measurably enough budget
+    # left, so the deadline is enforced rather than merely reported.
+    affordable = remaining_ms is None or remaining_ms >= cfg.semantic_span_min_budget_ms
     semantic = None
-    if float(lexical.max()) <= 0.0:
+    if float(lexical.max()) <= 0.0 and affordable:
         try:
             # Cap the work: encoding every sentence of every candidate is the
             # one part of this path that scales with retrieval depth, and the

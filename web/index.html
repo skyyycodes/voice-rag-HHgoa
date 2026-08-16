@@ -91,6 +91,7 @@
       <div class="stat"><div class="lbl">Pipeline</div><div class="big" id="t-pipe">—</div></div>
       <div class="stat"><div class="lbl">Retrieval</div><div class="big" id="t-ret">—</div></div>
       <div class="stat"><div class="lbl">Speech-to-text</div><div class="big" id="t-stt">—</div></div>
+      <div class="stat"><div class="lbl">Rerank depth</div><div class="big" id="t-depth">—</div></div>
       <div class="stat"><div class="lbl">Budget</div><div class="big" id="t-budget">—</div></div>
     </div>
     <div class="scroll"><table id="stages"></table></div>
@@ -158,6 +159,12 @@ function render(r) {
   $('t-pipe').innerHTML = fmt(r.pipeline_ms);
   $('t-ret').innerHTML = fmt(t.retrieve);
   $('t-stt').innerHTML = t.transcribe ? fmt(t.transcribe) : '<span class="muted">n/a</span>';
+  // The cross-encoder depth is chosen per request from the budget still
+  // remaining, so this number moves: a slow transcription leaves less time and
+  // the pipeline reranks shallower rather than missing the deadline.
+  $('t-depth').innerHTML = r.rerank_depth
+    ? `${r.rerank_depth}<small class="muted"> pairs</small>`
+    : '<span class="muted">skipped</span>';
   $('t-budget').innerHTML = r.budget_exceeded
     ? '<span style="color:var(--bad)">over</span>' : '<span style="color:var(--accent)">within</span>';
 

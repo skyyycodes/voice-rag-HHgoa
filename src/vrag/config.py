@@ -27,7 +27,6 @@ class Settings(BaseSettings):
     )
 
     # ---- paths -------------------------------------------------------------
-    data_dir: Path = REPO_ROOT / "data"
     raw_dir: Path = REPO_ROOT / "data" / "raw"
     index_dir: Path = REPO_ROOT / "data" / "index"
 
@@ -74,8 +73,12 @@ class Settings(BaseSettings):
     # scores. Small on purpose: it breaks ties between translations of the same
     # passage without letting a weak same-language match beat a strong foreign
     # one.
-    same_language_bonus: float = 0.15
-    english_fallback_bonus: float = 0.06
+    # 0.6 chosen from a measured sweep: it lifts same-language answers from 28%
+    # to 44% at *no* cost to R@1 or MRR. Above it quality degrades (at 1.6,
+    # same-language reaches 57% but R@1 falls 0.152 -> 0.127), so this is the
+    # last point where the preference is genuinely free.
+    same_language_bonus: float = 0.60
+    english_fallback_bonus: float = 0.24
 
     # HNSW build/search knobs. `ef_search` is the main latency/recall dial.
     hnsw_connectivity: int = 16
@@ -100,16 +103,11 @@ class Settings(BaseSettings):
     rerank_depth: int = 8
     local_rerank_path: str = ""
     local_rerank_tokenizer: str = ""
-    # Lifts cross-encoder logits (roughly -11..+11) clear of the linear
-    # feature scores so a reranked candidate never sorts below an unreranked
-    # one purely because the two scales differ.
-    rerank_score_offset: float = 100.0
 
     # ---- latency budget (milliseconds, per stage) --------------------------
     # The harness enforces these; a stage that blows its budget degrades
     # instead of blocking the pipeline.
     budget_total_ms: float = 200.0
-    budget_guardrail_in_ms: float = 10.0
     budget_retrieve_ms: float = 120.0
     budget_generate_ms: float = 40.0
     budget_guardrail_out_ms: float = 20.0
@@ -119,20 +117,32 @@ class Settings(BaseSettings):
     # cosine magnitudes differ systematically by language, so a constant floor
     # calibrated on Hindi rejects valid Tamil traffic. Both must be low to
     # abstain. Calibrated by `vrag.calibrate_guardrails`.
-    ood_margin_floor: float = 1.0
-    ood_dense_floor: float = 0.80
+    # Fitted by `vrag.calibrate_guardrails` at a 5% target false-rejection
+    # rate, not hand-picked. Note the tool also measured this rail's
+    # out-of-domain catch rate at 0.0% — see the README; the thresholds are
+    # applied as calibrated rather than tuned until the number looked better.
+    ood_margin_floor: float = 0.8665
+    ood_dense_floor: float = 0.823
     # Minimum lexical+semantic overlap between answer and cited chunk.
     grounding_floor: float = 0.45
     # Cosine below which a cross-lingual span counts as unrelated. e5
     # similarities are compressed into a narrow high band, so this is ~0.78
     # rather than the ~0.3 an uncalibrated intuition would suggest.
     semantic_span_floor: float = 0.82
-    # Max sentences encoded on the cross-lingual span path.
-    semantic_span_limit: int = 24
+    # Max sentences encoded on the cross-lingual span path. Was 24, which cost
+    # up to 147ms at P100 and single-handedly pushed end-to-end latency past
+    # the 200ms bar. With `answer_rank_decay` at 0.60 a rank-3 span must be
+    # ~4.6x better to win at all, so sentences beyond the top couple of
+    # candidates were being encoded and then never selected.
+    semantic_span_limit: int = 8
     # Per-rank multiplier when choosing which retrieved passage to quote.
     # Geometric so retrieval order dominates span score; at 0.72 a rank-3
     # sentence needs to be ~4.6x better in isolation to win.
     answer_rank_decay: float = 0.60
+    # Minimum budget remaining before the cross-lingual span fallback is worth
+    # starting. Below it the answerer stays lexical, which may abstain — an
+    # honest abstention inside the deadline beats a good answer outside it.
+    semantic_span_min_budget_ms: float = 60.0
     min_query_chars: int = 3
     max_query_chars: int = 512
 
@@ -146,6 +156,10 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("VRAG_ELEVENLABS_API_KEY", "ELEVENLABS_API_KEY")
     )
     elevenlabs_model: str = "scribe_v1"
+    # Upper bound on a single voice upload. Sarvam accepts far larger files,
+    # but this endpoint is public and unauthenticated on a deployed Space, so
+    # the ceiling is set by what a spoken question plausibly needs.
+    max_audio_bytes: int = 12_000_000
     stt_timeout_s: float = 12.0
     stt_max_retries: int = 2
 
