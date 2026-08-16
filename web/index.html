@@ -1,0 +1,234 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Voice RAG — MSMARCO-XI</title>
+<style>
+  :root {
+    --bg: #0f1115; --panel: #171a21; --line: #262b36;
+    --fg: #e6e9ef; --dim: #949cad; --accent: #6ee7a8; --warn: #f5b971; --bad: #f2777a;
+    --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, monospace;
+  }
+  @media (prefers-color-scheme: light) {
+    :root { --bg:#f7f8fa; --panel:#fff; --line:#e3e6ec; --fg:#12151b; --dim:#5c6474;
+            --accent:#0f9d58; --warn:#b26a00; --bad:#c62828; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg); font:15px/1.55 system-ui,-apple-system,Segoe UI,sans-serif; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 28px 20px 64px; }
+  header { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin-bottom:6px; }
+  h1 { font-size:20px; margin:0; letter-spacing:-.01em; }
+  .sub { color:var(--dim); font-size:13px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px; margin-top:16px; }
+  .row { display:flex; gap:10px; flex-wrap:wrap; align-items:center; }
+  button { font:inherit; color:var(--fg); background:var(--panel); border:1px solid var(--line);
+           border-radius:9px; padding:10px 16px; cursor:pointer; transition:.15s; }
+  button:hover:not(:disabled) { border-color:var(--accent); }
+  button:disabled { opacity:.45; cursor:not-allowed; }
+  button.primary { background:var(--accent); color:#0b0d10; border-color:var(--accent); font-weight:600; }
+  #mic.rec { background:var(--bad); border-color:var(--bad); color:#fff; animation:pulse 1.1s infinite; }
+  @keyframes pulse { 50% { opacity:.62; } }
+  input[type=text], select { font:inherit; color:var(--fg); background:var(--bg);
+    border:1px solid var(--line); border-radius:9px; padding:10px 12px; }
+  input[type=text] { flex:1; min-width:220px; }
+  .answer { font-size:17px; line-height:1.6; margin:4px 0 0; }
+  .muted { color:var(--dim); }
+  .pill { display:inline-block; font:600 11px/1 var(--mono); letter-spacing:.04em;
+          padding:5px 9px; border-radius:999px; border:1px solid var(--line); }
+  .ok { color:var(--accent); border-color:var(--accent); }
+  .no { color:var(--warn); border-color:var(--warn); }
+  .err { color:var(--bad); border-color:var(--bad); }
+  table { width:100%; border-collapse:collapse; font:12px/1.5 var(--mono); }
+  th, td { text-align:left; padding:5px 8px; border-bottom:1px solid var(--line); }
+  th { color:var(--dim); font-weight:600; }
+  td.n { text-align:right; }
+  .cite { border-left:2px solid var(--line); padding:8px 0 8px 12px; margin:10px 0; font-size:13.5px; }
+  .cite .meta { color:var(--dim); font:11px var(--mono); margin-bottom:3px; }
+  mark { background:rgba(110,231,168,.22); color:inherit; padding:1px 2px; border-radius:3px; }
+  .scroll { overflow-x:auto; }
+  .big { font:600 26px/1 var(--mono); }
+  .stat { flex:1; min-width:110px; }
+  .stat .lbl { color:var(--dim); font-size:11px; text-transform:uppercase; letter-spacing:.06em; margin-bottom:5px; }
+  details summary { cursor:pointer; color:var(--dim); font-size:13px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Voice RAG</h1>
+    <span class="sub">MSMARCO-XI · Hindi · Bengali · Tamil · English</span>
+  </header>
+  <p class="sub" id="status">loading index…</p>
+
+  <div class="card">
+    <div class="row">
+      <button id="mic">🎙 Hold to speak</button>
+      <input type="text" id="q" placeholder="…or type a question in any indexed language">
+      <select id="mode">
+        <option value="extractive">Extractive (fast)</option>
+        <option value="llm">LLM (Claude)</option>
+      </select>
+      <button class="primary" id="go">Ask</button>
+    </div>
+    <p class="sub" id="hint" style="margin:12px 0 0">
+      Try: <code>कॉर्पोरेशन क्या है?</code> · <code>what is a corporation</code> ·
+      or something off-topic to see the system decline.
+    </p>
+  </div>
+
+  <div class="card" id="out" hidden>
+    <div class="row" style="justify-content:space-between; margin-bottom:10px">
+      <span class="pill" id="verdict">—</span>
+      <span class="sub" id="meta"></span>
+    </div>
+    <p class="answer" id="answer"></p>
+    <div id="cites"></div>
+  </div>
+
+  <div class="card" id="perf" hidden>
+    <div class="row" style="gap:20px; margin-bottom:14px">
+      <div class="stat"><div class="lbl">Pipeline</div><div class="big" id="t-pipe">—</div></div>
+      <div class="stat"><div class="lbl">Retrieval</div><div class="big" id="t-ret">—</div></div>
+      <div class="stat"><div class="lbl">Speech-to-text</div><div class="big" id="t-stt">—</div></div>
+      <div class="stat"><div class="lbl">Budget</div><div class="big" id="t-budget">—</div></div>
+    </div>
+    <div class="scroll"><table id="stages"></table></div>
+    <details style="margin-top:12px"><summary>Raw response</summary>
+      <pre class="scroll" style="font:11px var(--mono); color:var(--dim)" id="raw"></pre>
+    </details>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let recorder = null, chunks = [];
+
+// The pipeline reports two totals. `pipeline_ms` is local compute — the number
+// the 200ms budget applies to. `total_ms` adds the STT network round trip,
+// which no third-party API can fit inside that budget. Showing both is the
+// honest presentation; showing only one would misrepresent whichever it hid.
+const fmt = ms => ms == null ? '—' : (ms < 10 ? ms.toFixed(1) : Math.round(ms)) + '<small class="muted"> ms</small>';
+
+async function boot() {
+  try {
+    const h = await (await fetch('/api/health')).json();
+    const m = h.manifest || {};
+    $('status').innerHTML =
+      `${(h.chunks || 0).toLocaleString()} chunks · ${(m.strategies || []).length} chunking strategies · ` +
+      `STT: ${h.stt_providers?.join(', ') || 'none configured'} · ` +
+      `LLM: ${h.llm_available ? 'available' : 'not configured'}`;
+    if (!h.llm_available) $('mode').querySelector('[value=llm]').disabled = true;
+  } catch { $('status').textContent = 'server unreachable'; }
+}
+
+function render(r) {
+  $('out').hidden = false; $('perf').hidden = false;
+
+  const v = $('verdict');
+  const answered = r.decision === 'answer';
+  v.className = 'pill ' + (answered ? 'ok' : r.decision === 'error' ? 'err' : 'no');
+  v.textContent = r.decision.replace(/_/g, ' ').toUpperCase();
+
+  $('answer').textContent = answered ? r.answer : (r.reason || '—');
+  $('answer').className = 'answer' + (answered ? '' : ' muted');
+
+  const bits = [];
+  if (r.transcript) bits.push(`heard: “${r.transcript}”`);
+  if (r.detected_language) bits.push(r.detected_language);
+  if (r.stt_provider) bits.push(`via ${r.stt_provider}`);
+  if (answered) bits.push(`grounding ${r.grounding_score.toFixed(2)}`);
+  if (r.triggered?.length) bits.push(`rails: ${r.triggered.join(', ')}`);
+  if (r.degraded?.length) bits.push(`degraded: ${r.degraded.join(', ')}`);
+  $('meta').textContent = bits.join(' · ');
+
+  // Highlight the exact quoted span inside its source passage, so a reader can
+  // verify the answer against the corpus rather than trusting the label.
+  $('cites').innerHTML = (r.citations || []).map(c => {
+    let body = c.context;
+    if (c.span_start >= 0 && c.span_end > c.span_start) {
+      body = esc(c.context.slice(0, c.span_start)) +
+             '<mark>' + esc(c.context.slice(c.span_start, c.span_end)) + '</mark>' +
+             esc(c.context.slice(c.span_end));
+    } else { body = esc(body); }
+    return `<div class="cite"><div class="meta">chunk ${c.chunk_id} · ${c.lang} · score ${c.score.toFixed(3)}</div>${body}</div>`;
+  }).join('');
+
+  const t = Object.fromEntries((r.timings || []).map(s => [s.stage, s.ms]));
+  $('t-pipe').innerHTML = fmt(r.pipeline_ms);
+  $('t-ret').innerHTML = fmt(t.retrieve);
+  $('t-stt').innerHTML = t.transcribe ? fmt(t.transcribe) : '<span class="muted">n/a</span>';
+  $('t-budget').innerHTML = r.budget_exceeded
+    ? '<span style="color:var(--bad)">over</span>' : '<span style="color:var(--accent)">within</span>';
+
+  $('stages').innerHTML =
+    '<tr><th>stage</th><th class="n">ms</th><th class="n">tries</th><th>result</th></tr>' +
+    (r.timings || []).map(s =>
+      `<tr><td>${s.stage}</td><td class="n">${s.ms.toFixed(2)}</td><td class="n">${s.attempts}</td>` +
+      `<td>${s.ok ? '✓' : '✗'} <span class="muted">${esc(s.note || '')}</span></td></tr>`).join('');
+
+  $('raw').textContent = JSON.stringify(r, null, 2);
+}
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+
+async function askText() {
+  const text = $('q').value.trim();
+  if (!text) return;
+  $('go').disabled = true;
+  try {
+    const r = await fetch('/api/ask', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ text, answer_mode: $('mode').value })
+    });
+    render(await r.json());
+  } catch (e) { alert('Request failed: ' + e.message); }
+  finally { $('go').disabled = false; }
+}
+
+async function sendAudio(blob) {
+  const fd = new FormData();
+  fd.append('audio', blob, 'speech.webm');
+  fd.append('answer_mode', $('mode').value);
+  try {
+    const r = await fetch('/api/voice', { method: 'POST', body: fd });
+    render(await r.json());
+  } catch (e) { alert('Upload failed: ' + e.message); }
+}
+
+async function startRec() {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    recorder = new MediaRecorder(stream);
+    chunks = [];
+    recorder.ondataavailable = e => e.data.size && chunks.push(e.data);
+    recorder.onstop = () => {
+      stream.getTracks().forEach(t => t.stop());
+      if (chunks.length) sendAudio(new Blob(chunks, { type: 'audio/webm' }));
+    };
+    recorder.start();
+    $('mic').classList.add('rec');
+    $('mic').textContent = '● Recording — release to send';
+  } catch (e) { alert('Microphone unavailable: ' + e.message); }
+}
+
+function stopRec() {
+  if (recorder?.state === 'recording') recorder.stop();
+  recorder = null;
+  $('mic').classList.remove('rec');
+  $('mic').textContent = '🎙 Hold to speak';
+}
+
+$('go').onclick = askText;
+$('q').onkeydown = e => e.key === 'Enter' && askText();
+// Press-and-hold, on both pointer and touch.
+$('mic').onmousedown = startRec;
+$('mic').onmouseup = stopRec;
+$('mic').onmouseleave = stopRec;
+$('mic').ontouchstart = e => { e.preventDefault(); startRec(); };
+$('mic').ontouchend = e => { e.preventDefault(); stopRec(); };
+
+boot();
+</script>
+</body>
+</html>
