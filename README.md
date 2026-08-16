@@ -318,22 +318,27 @@ their English sources). Warm-up runs excluded. Raw JSON in
 ### Latency — the 200ms target
 
 ```
-P50    5.44 ms     P70   22.97 ms     P95   58.91 ms     P100  170.75 ms
-within 200ms budget: 100.0% of queries      57.0 queries/sec, single process
+P50   55.64 ms     P70   62.34 ms     P95   90.50 ms     P100  149.51 ms
+within 200ms budget: 100.0% of queries      17.2 queries/sec, single process
 ```
 
 | stage | P50 | P70 | P95 | P100 |
 |---|---:|---:|---:|---:|
-| retrieve | 4.75 | 5.08 | 5.67 | 6.12 |
-| generate | 0.14 | 18.21 | 54.24 | 166.46 |
-| guard_input | 0.03 | 0.03 | 0.04 | 0.19 |
-| guard_evidence | 0.02 | 0.02 | 0.02 | 0.03 |
-| guard_output | 0.03 | 0.04 | 0.05 | 0.08 |
+| retrieve | 45.88 | 54.36 | 66.02 | 67.24 |
+| generate | 0.18 | 25.04 | 41.11 | 84.59 |
+| guard_input | 0.04 | 0.04 | 0.05 | 0.19 |
+| guard_evidence | 0.03 | 0.04 | 0.04 | 0.05 |
+| guard_output | 0.04 | 0.04 | 0.06 | 0.11 |
 
-Retrieval is flat and predictable. The entire tail lives in `generate`: when a
-question's evidence is only available in another language, lexical span scoring
-scores zero and the answerer falls back to encoding candidate sentences. That
-path costs ~50-170ms and fires on roughly a third of queries.
+Most of `retrieve` is the cross-encoder, which is a deliberate purchase: without
+it the pipeline runs at **P50 5.4ms** but scores MRR 0.176. Spending 40ms of a
+200ms budget buys +17% MRR and nearly doubles the rate at which the cited
+passage is a gold-labelled one (5.5% -> 10.3%). Banking 36x headroom that no
+user benefits from would have been the worse engineering call.
+
+The `generate` tail is the cross-lingual span fallback, which fires when a
+question's evidence exists only in another language. It is gated on the budget
+actually remaining — see below.
 
 **Speech-to-text is excluded from these figures and reported separately.**
 Measured end-to-end on the live API with a spoken Hindi question:
@@ -354,16 +359,55 @@ actually constrains.
 
 | configuration | R@1 | R@5 | MRR@5 | p50 |
 |---|---:|---:|---:|---:|
-| dense only (ANN) | 0.109 | 0.291 | 0.170 | 1.8 ms |
-| BM25 only | 0.061 | 0.188 | 0.106 | 1.7 ms |
-| hybrid + RRF fusion | 0.097 | 0.236 | 0.147 | 4.6 ms |
-| hybrid + RRF + learned rerank | 0.103 | 0.297 | 0.176 | 4.6 ms |
+| dense only (ANN) | 0.109 | 0.291 | 0.170 | 2.5 ms |
+| BM25 only | 0.061 | 0.188 | 0.106 | 1.8 ms |
+| hybrid + RRF fusion | 0.145 | 0.273 | 0.184 | 53.1 ms |
+| hybrid + RRF + cross-encoder | **0.152** | **0.303** | **0.206** | 46.1 ms |
 
-Two things this table says that a summary would hide. **RRF fusion alone is
-worse than dense alone** — adding BM25 by rank costs recall on this corpus, and
-only the rerank stage recovers it. And the full stack beats dense-only by
-**+3.8% MRR for +2.8ms**, which is a real but modest return on the whole hybrid
-layer.
+Full stack beats dense-only by **+21.1% MRR**. One thing the table says that a
+summary would hide: **RRF fusion alone is worse on R@5 than dense alone** —
+adding BM25 by rank costs recall on this corpus, and only the rerank stage
+recovers it.
+
+### Spending the budget instead of banking it
+
+Retrieval without a cross-encoder runs at P50 5.4ms — 36x under the target.
+That is not a result worth protecting; it is unspent budget. A multilingual
+cross-encoder (`mmarco-mMiniLMv2`, int8 ONNX, 118MB, trained on multilingual
+MS MARCO) reads the query and chunk *jointly* and separates them far better
+than any feature model: on a Hindi query it scores the relevant passage +3.91,
+a same-topic distractor -2.80, an unrelated passage -7.23.
+
+Three measured decisions made it fit, each of which was wrong on the first try:
+
+- **Score the indexed chunk, not the parent context** — 5x cheaper (57ms vs
+  288ms per 20 pairs), since cost scales with pair length.
+- **Disable ONNX spin-wait.** Two sessions in one process busy-wait against
+  each other on 4 performance cores; the reranker was ~4x slower in-pipeline
+  than standalone until they were told to yield.
+- **Depth 8**, read off a measured quality-vs-budget curve rather than guessed
+  (`bench/results/quality_vs_budget.json`):
+
+| rerank depth | R@1 | R@5 | MRR | P100 |
+|---:|---:|---:|---:|---:|
+| 0 | 0.103 | 0.297 | 0.176 | 74.3 ms |
+| **8** | **0.152** | 0.303 | **0.206** | **139.8 ms** |
+| 16 | 0.127 | 0.315 | 0.199 | 211.8 ms ✗ |
+| 24 | 0.121 | 0.333 | 0.194 | 284.2 ms ✗ |
+
+Depth 8 maximises MRR while keeping *every* percentile inside the bar. Deeper
+buys R@5 and breaks it.
+
+**The budget is a scheduling input, not a report.** `depth_for_budget()` picks
+the depth from the time actually left on the request, and the cross-lingual
+span fallback refuses to start without enough remaining. A slow transcription
+leaves less budget, so the pipeline reranks shallower and abstains sooner
+rather than missing the deadline. The UI shows the depth chosen per request.
+
+This was not free to get right. An earlier version computed the depth and then
+let generation run unbounded — P100 reached 222ms and 0.6% of queries breached
+the target while the code cheerfully reported `budget_exceeded`. Enforcement
+had to be added where the time is actually spent.
 
 The reranker is fitted per build and **only shipped if it generalises**:
 held-out pairwise accuracy must clear 0.55 or the build discards it and falls
@@ -381,14 +425,27 @@ top hit — a Hindi speaker was routinely answered in Bengali.
 A small explicit preference (applied after ranking, not learned — relevance
 labels say nothing about what language the reader speaks) fixes it:
 
-| | before | after |
-|---|---:|---:|
-| answered in the query's language | 22% | **56%** |
-| fell back to English | 20% | 36% |
-| answered in an unrelated third language | 58% | **8%** |
+The strength of that preference is itself measured, not chosen by feel:
 
-It also cut P50 latency **5.8x (31.5ms → 5.4ms)**: same-language evidence has
-lexical overlap, so the expensive cross-lingual fallback stops firing.
+| bonus | same-language | R@1 | MRR |
+|---:|---:|---:|---:|
+| 0.00 | 28% | 0.139 | 0.200 |
+| **0.60** | **44%** | **0.152** | **0.206** |
+| 1.00 | 54% | 0.133 | 0.197 |
+| 1.60 | 57% | 0.127 | 0.196 |
+
+0.60 is the last point where the preference is *free* — it lifts same-language
+answers from 28% to 44% at no cost to accuracy. Pushing to 57% costs 16% of R@1,
+so it is not taken.
+
+An audit caught this being applied wrongly. The bonus is scaled by the candidate
+set's score spread, and once the cross-encoder was added that spread was
+dominated by an artificial offset between two score scales: a **16.1-point**
+language bonus was landing on a cross-encoder whose entire discriminative range
+was **4.4 points**. Language silently overrode relevance on every reranked
+query, and the resulting "58% same-language" was forced rather than earned —
+costing R@1 0.152 -> 0.133. Scores are now normalised onto one scale and the
+bonus is scoped to candidates that share it.
 
 ### Guardrails
 
