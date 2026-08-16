@@ -237,11 +237,117 @@ amortised, and reported as build throughput instead.
 
 ## Results
 
-> Numbers below are produced by `uv run python -m vrag.bench --n 400` on
-> held-out queries the reranker never saw, and written to
-> `bench/results/latest.json`. Warm-up runs are excluded.
+All numbers below come from `uv run python -m vrag.bench` and
+`vrag.eval_retrieval` on **165 held-out queries the reranker never saw**,
+against a **127,372-chunk** index (11,960 passages · Hindi, Bengali, Tamil, and
+their English sources). Warm-up runs excluded. Raw JSON in
+`bench/results/latest.json`.
 
-*(populated from the benchmark run — see `bench/results/latest.json`)*
+### Latency — the 200ms target
+
+```
+P50    5.44 ms     P70   22.97 ms     P95   58.91 ms     P100  170.75 ms
+within 200ms budget: 100.0% of queries      57.0 queries/sec, single process
+```
+
+| stage | P50 | P70 | P95 | P100 |
+|---|---:|---:|---:|---:|
+| retrieve | 4.75 | 5.08 | 5.67 | 6.12 |
+| generate | 0.14 | 18.21 | 54.24 | 166.46 |
+| guard_input | 0.03 | 0.03 | 0.04 | 0.19 |
+| guard_evidence | 0.02 | 0.02 | 0.02 | 0.03 |
+| guard_output | 0.03 | 0.04 | 0.05 | 0.08 |
+
+Retrieval is flat and predictable. The entire tail lives in `generate`: when a
+question's evidence is only available in another language, lexical span scoring
+scores zero and the answerer falls back to encoding candidate sentences. That
+path costs ~50-170ms and fires on roughly a third of queries.
+
+**Speech-to-text is excluded from these figures and reported separately.**
+Measured end-to-end on the live API with a spoken Hindi question:
+
+```
+POST /api/voice   (spoken: "कॉर्पोरेशन क्या है?")
+  transcript  : कॉर्पोरेशन क्या है?     detected hi-IN via Sarvam
+  answer      : एक निगम एक कंपनी या लोगों का समूह है ...   cited chunk: hin
+  pipeline_ms : 23.3          total_ms: 660.9
+  stages      : transcribe 637.5 | retrieve 22.3 | generate 0.6 | guards 0.5
+```
+
+Sarvam is 96% of wall-clock. No third-party ASR fits in 200ms, so folding it
+into one headline number would hide which part of the system the budget
+actually constrains.
+
+### Retrieval quality
+
+| configuration | R@1 | R@5 | MRR@5 | p50 |
+|---|---:|---:|---:|---:|
+| dense only (ANN) | 0.109 | 0.291 | 0.170 | 1.8 ms |
+| BM25 only | 0.061 | 0.188 | 0.106 | 1.7 ms |
+| hybrid + RRF fusion | 0.097 | 0.236 | 0.147 | 4.6 ms |
+| hybrid + RRF + learned rerank | 0.103 | 0.297 | 0.176 | 4.6 ms |
+
+Two things this table says that a summary would hide. **RRF fusion alone is
+worse than dense alone** — adding BM25 by rank costs recall on this corpus, and
+only the rerank stage recovers it. And the full stack beats dense-only by
+**+3.8% MRR for +2.8ms**, which is a real but modest return on the whole hybrid
+layer.
+
+The reranker is fitted per build and **only shipped if it generalises**:
+held-out pairwise accuracy must clear 0.55 or the build discards it and falls
+back to RRF-only ordering. It scored 0.561 here and shipped. On the previous
+build — before the Indic tokenisation fix — it scored **0.501, exactly chance**,
+and would have been rejected.
+
+### Answering in the asker's language
+
+MSMARCO-XI translates every passage into every language, so near-identical
+translations sit next to each other in embedding space and retrieval picks
+among them arbitrarily. Measured, only **22%** of queries got a same-language
+top hit — a Hindi speaker was routinely answered in Bengali.
+
+A small explicit preference (applied after ranking, not learned — relevance
+labels say nothing about what language the reader speaks) fixes it:
+
+| | before | after |
+|---|---:|---:|
+| answered in the query's language | 22% | **56%** |
+| fell back to English | 20% | 36% |
+| answered in an unrelated third language | 58% | **8%** |
+
+It also cut P50 latency **5.8x (31.5ms → 5.4ms)**: same-language evidence has
+lexical overlap, so the expensive cross-lingual fallback stops firing.
+
+### Guardrails
+
+The smoke suite exercises every outcome; all six probes behave correctly —
+in-domain English and Hindi answer with citations, unsafe/injection/too-short
+are refused in under 0.05ms, and the personal-scope query is declined.
+
+**The evidence-margin rail does not work, and the calibration measured it.**
+Fitting thresholds against in-domain vs out-of-domain populations gives
+**0.0% out-of-domain catch rate**: out-of-domain queries score a *higher*
+median margin (2.957) than in-domain ones (1.979). The signal is inverted, not
+merely weak. Reported as measured rather than tuned until it looked good.
+
+What does work is the **personal-scope input rail** — "what did I have for
+breakfast" retrieves passages about breakfast, so the topic matches and only
+the scope is impossible; no similarity signal can catch that. Verified against
+real traffic: **1 false rejection in 263 held-out MS MARCO queries**, while
+correctly allowing "how much does my dog need to eat", "what is my credit
+score", and "my heart rate is 120 what does that mean".
+
+### The weakest number
+
+**The system answers 98.8% of queries but cites a gold-labelled passage only
+5.5% of the time.** Some of that gap is measurement — MS MARCO marks roughly
+one passage in ten as gold, so a correct citation of an unlabelled passage
+counts as a miss — but not all of it. R@5 is 0.297, meaning the gold chunk is
+in the top five for 30% of queries, so the answerer is picking a non-gold
+candidate more often than it should. It is confident far more often than it is
+verifiably right, and the abstention rails are not catching the difference.
+
+That is the first thing to fix, ahead of any further latency work.
 
 ---
 

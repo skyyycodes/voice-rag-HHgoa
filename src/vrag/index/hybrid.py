@@ -34,6 +34,7 @@ import numpy as np
 
 from ..config import Settings, settings
 from ..embed import encode_query
+from ..script_detect import detect_script
 from .dense import DenseIndex
 from .lexical import LexicalIndex, tokenize
 from .store import ChunkStore
@@ -146,8 +147,32 @@ class HybridRetriever:
         candidates = candidates[: cfg.fusion_candidates]
 
         self._score(query, candidates)
+        self._prefer_query_language(query, candidates)
         candidates.sort(key=lambda c: c.score, reverse=True)
         return self._diversify(candidates, k)
+
+    def _prefer_query_language(self, query: str, candidates: list[Candidate]) -> None:
+        """Nudge same-script candidates above their translations.
+
+        Applied after scoring rather than as a reranker feature: which language
+        the reader wants is a product decision, and the relevance labels carry
+        no signal about it. The bonus is small because it is only meant to
+        break ties between translations of the same passage — it must not
+        promote a weakly-matching same-language chunk over a strongly-matching
+        foreign one, since a correct answer in the wrong language still beats a
+        wrong answer in the right one.
+        """
+        want = detect_script(query)
+        if not want:
+            return
+        for cand in candidates:
+            if cand.lang == want:
+                cand.score += self.cfg.same_language_bonus
+            elif cand.lang == "eng":
+                # English is the corpus's source language and the most common
+                # second language of its readers, so it is the preferred
+                # fallback when the query's own language is unavailable.
+                cand.score += self.cfg.english_fallback_bonus
 
     def _new_candidate(self, i: int) -> Candidate:
         s = self.store

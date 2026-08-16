@@ -68,6 +68,11 @@ class Settings(BaseSettings):
     # Below this it is not better than the RRF ordering it would replace, and
     # the build falls back rather than reordering results by noise.
     rerank_min_held_out_acc: float = 0.55
+    # Answer in the language the question was asked in. Small on purpose: it
+    # breaks ties between translations of the same passage without letting a
+    # weak same-language match beat a strong foreign one.
+    same_language_bonus: float = 0.25
+    english_fallback_bonus: float = 0.10
 
     # HNSW build/search knobs. `ef_search` is the main latency/recall dial.
     hnsw_connectivity: int = 16
