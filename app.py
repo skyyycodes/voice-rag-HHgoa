@@ -98,6 +98,23 @@ if spaces is not None:
         return "Retrieval runs on CPU (int8 ONNX). No GPU is used at query time."
 
 
+# A build stamp, so "is the deployed code the code I pushed?" is answerable by
+# looking at the page instead of by inference. Hashing the guardrails source
+# specifically: that module is where behaviour has been changing, and a Space
+# that serves a stale image reports a stale hash here.
+def _build_stamp() -> str:
+    import hashlib
+    import time
+
+    from vrag.guardrails import input_rails
+
+    src = Path(input_rails.__file__).read_bytes()
+    return (f"build {time.strftime('%Y-%m-%d %H:%M', time.gmtime())}Z · "
+            f"rails {hashlib.sha256(src).hexdigest()[:8]}")
+
+
+BUILD_STAMP = _build_stamp()
+
 LLM_INFO = (
     f"extractive is the sub-200ms path; llm runs on {LLM_PROVIDER}"
     if LLM_PROVIDER
@@ -290,6 +307,7 @@ with gr.Blocks(title="Voice RAG — MSMARCO-XI") as demo:
         f"The system retrieves from **{MANIFEST.get('chunks', 0):,} chunks** built with "
         f"**{len(MANIFEST.get('strategies', []))} chunking strategies**, verifies the answer "
         f"is grounded in the retrieved passages, and answers — or declines and says why.\n\n"
+        f"<sub>{BUILD_STAMP}</sub>\n\n"
         + ("" if STT_READY else
            "> ⚠️ **`SARVAM_API_KEY` is not set**, so the microphone is disabled. "
            "Text input works and exercises everything after transcription.")
