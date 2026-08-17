@@ -95,33 +95,67 @@ _PERSONAL_SCOPE: list[tuple[str, re.Pattern]] = [
 # highly, so the relevance floor never fires. Raising the floor high enough to
 # catch these would decline real questions instead.
 #
-# The rule is all-or-nothing on purpose: *every* token must be conversational
-# filler. "what is a hello world program" and "how are you supposed to file
-# taxes" both pass, because they carry content words this set does not contain.
-# Same character class as the lexical tokeniser — a bare `\w+` would shred
+# The rule is all-or-nothing on purpose: *every* token must be conversational,
+# and at least one must actually be a greeting. "what is a hello world program"
+# and "how are you supposed to file taxes" both pass, because they carry content
+# words these sets do not contain; a bare "a lot" is not a greeting either,
+# because nothing in it is.
+#
+# Same character class as the lexical tokeniser — a plain `\w+` would shred
 # Indic greetings into consonant fragments and match nothing.
 _CHITCHAT_TOKEN = re.compile(r"[\wऀ-෿̀-ͯ]+", re.UNICODE)
-_CHITCHAT_WORDS = frozenset(
+
+# Words that signal a greeting on their own.
+_GREETING_WORDS = frozenset(
     """
     hi hii hiii hello helo hey heyy heya yo yoo hiya howdy sup wassup whatsup
     hola greetings namaste namaskar salaam
-    good great nice fine cool ok okay okey yes no
     morning afternoon evening night
-    how are you u ur is it going doing r s m
-    what whats up there
-    thanks thank thankyou thx ty please welcome a lot much
-    bye goodbye cya later
-    mate bro dude buddy friend sir maam madam
-    नमस्ते नमस्कार हाय हैलो कैसे हो आप क्या हाल है
-    নমস্কার হাই কেমন আছেন আছো তুমি আপনি
-    வணக்கம் ஹாய் எப்படி இருக்கிறீர்கள்
+    thanks thank thankyou thx ty
+    bye goodbye cya
+    नमस्ते नमस्कार हाय हैलो
+    নমস্কার হাই
+    வணக்கம் ஹாய்
     """.split()
+)
+
+# Words carrying no topic of their own. Allowed *alongside* a greeting, never
+# sufficient on their own — otherwise "what is it" would be refused as a
+# greeting instead of being retrieved against and honestly abstained on.
+_FILLER_WORDS = frozenset(
+    """
+    good great nice fine cool ok okay okey yes no
+    how are you u ur is it going doing r s m a an lot much so very
+    what whats there please welcome later up
+    mate bro dude buddy friend sir maam madam
+    कैसे हो आप क्या हाल है
+    কেমন আছেন আছো তুমি আপনি
+    எப்படி இருக்கிறீர்கள்
+    """.split()
+)
+
+# Openers built entirely from filler, where the *sequence* is the greeting.
+# Matched on the whole normalised token string, so "what's up" ("what s up")
+# and "whats up" both land, while "what is up with bond yields" does not.
+_GREETING_PHRASES = frozenset(
+    {
+        "how are you", "how are you doing", "how r u", "how are u",
+        "what s up", "whats up", "what is up", "sup",
+        "how is it going", "how s it going", "hows it going",
+        "who are you", "what are you", "what can you do",
+    }
 )
 
 
 def _is_chitchat(cleaned: str) -> bool:
     tokens = _CHITCHAT_TOKEN.findall(cleaned.lower())
-    return bool(tokens) and all(token in _CHITCHAT_WORDS for token in tokens)
+    if not tokens:
+        return False
+    if " ".join(tokens) in _GREETING_PHRASES:
+        return True
+    return any(t in _GREETING_WORDS for t in tokens) and all(
+        t in _GREETING_WORDS or t in _FILLER_WORDS for t in tokens
+    )
 
 
 # PII we should not echo back into logs or an answer.
@@ -169,6 +203,22 @@ def check_input(text: str, cfg: Settings = settings) -> GuardVerdict:
     cleaned = normalise(text)
     triggered: list[str] = []
 
+    # Ahead of the length check on purpose. "hi" is two characters, but calling
+    # it malformed and "too short to act on" is the wrong explanation for an
+    # input the system understands perfectly well — and it made the same class
+    # of query report two different reasons depending on how it was spelled.
+    if _is_chitchat(cleaned):
+        return GuardVerdict(
+            allowed=False,
+            decision=Decision.REJECT_OFF_TOPIC,
+            reason=(
+                "That is a greeting rather than a question. This system answers "
+                "only from an indexed passage corpus — ask it something those "
+                "passages could contain."
+            ),
+            triggered=["chitchat"],
+        )
+
     if len(cleaned) < cfg.min_query_chars:
         return GuardVerdict(
             allowed=False,
@@ -204,18 +254,6 @@ def check_input(text: str, cfg: Settings = settings) -> GuardVerdict:
                 reason="The query contains instruction-injection patterns.",
                 triggered=[name],
             )
-
-    if _is_chitchat(cleaned):
-        return GuardVerdict(
-            allowed=False,
-            decision=Decision.REJECT_OFF_TOPIC,
-            reason=(
-                "That is a greeting rather than a question. This system answers "
-                "only from an indexed passage corpus — ask it something those "
-                "passages could contain."
-            ),
-            triggered=["chitchat"],
-        )
 
     for name, pattern in _PERSONAL_SCOPE:
         if pattern.search(cleaned):
