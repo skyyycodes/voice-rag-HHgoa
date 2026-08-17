@@ -23,8 +23,19 @@ command -v git-lfs >/dev/null || { echo "git-lfs required: brew install git-lfs"
   echo "No index found. Run: uv run python -m vrag.build_index"; exit 1; }
 
 echo "→ staging in $STAGING"
-git clone "https://huggingface.co/spaces/$USER/$SPACE" "$STAGING" 2>/dev/null \
-  || { mkdir -p "$STAGING" && git -C "$STAGING" init -q; }
+# GIT_LFS_SKIP_SMUDGE: check out LFS *pointers*, not content. The next few lines
+# delete data/index and replace it with the local build, so downloading the
+# remote's 105MB index first is pure waste — it turned this step into a 15+
+# minute stall on a slow link.
+#
+# stderr is NOT suppressed. Hiding it made a slow clone and a broken clone look
+# identical: both printed one line and appeared to hang.
+# Not --depth 1: force-pushing from a shallow clone is refused by some servers,
+# and with the blobs left as pointers the full history is a few KB anyway.
+GIT_LFS_SKIP_SMUDGE=1 git clone \
+    "https://huggingface.co/spaces/$USER/$SPACE" "$STAGING" \
+  || { echo "  (no existing Space to clone — starting a fresh repo)"
+       mkdir -p "$STAGING" && git -C "$STAGING" init -q; }
 
 cd "$STAGING"
 git lfs install --local
@@ -36,6 +47,14 @@ rm -rf src data scripts && mkdir -p data
 cp -r "$REPO_ROOT/src" .
 cp -r "$REPO_ROOT/scripts" .
 cp -r "$REPO_ROOT/data/index" data/index
+
+# The latency tiles in the UI are read from this report rather than hardcoded,
+# so it has to ship. Without it `_bench_tiles()` returns empty and the headline
+# numbers silently disappear from the deployed page.
+if [ -f "$REPO_ROOT/bench/results/latest.json" ]; then
+  mkdir -p bench/results
+  cp "$REPO_ROOT/bench/results/latest.json" bench/results/latest.json
+fi
 
 cat > .gitattributes <<'EOF'
 *.usearch filter=lfs diff=lfs merge=lfs -text
