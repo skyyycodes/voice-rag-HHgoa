@@ -219,6 +219,20 @@ def check_input(text: str, cfg: Settings = settings) -> GuardVerdict:
             triggered=["chitchat"],
         )
 
+    # A query with no word characters at all cannot be retrieved against: both
+    # BM25 and the tokeniser see an empty term list, so retrieval returns
+    # essentially arbitrary passages that then score above the abstention floor.
+    # Found by typing "🎉🎉🎉", which came back ANSWER with grounding 1.00 and
+    # cited "Published: January 21, 1993." The length check misses it because
+    # three emoji are three characters.
+    if not _CHITCHAT_TOKEN.search(cleaned):
+        return GuardVerdict(
+            allowed=False,
+            decision=Decision.REJECT_MALFORMED,
+            reason="The query contains no words to search for.",
+            triggered=["no_searchable_terms"],
+        )
+
     if len(cleaned) < cfg.min_query_chars:
         return GuardVerdict(
             allowed=False,

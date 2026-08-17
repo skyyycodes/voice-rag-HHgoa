@@ -367,3 +367,26 @@ def test_chitchat_rail_blocks_greetings_without_declining_real_queries():
     queries = json.loads(Path("data/index/eval_queries.json").read_text())
     blocked = [q["query"] for q in queries if "chitchat" in check_input(q["query"]).triggered]
     assert not blocked, f"chitchat rail declined real held-out queries: {blocked[:3]}"
+
+
+def test_symbol_only_queries_are_rejected_before_retrieval():
+    """A query with no word characters cannot be retrieved against.
+
+    Regression for a false answer found on the deployed Space: "🎉🎉🎉" returned
+    ANSWER with grounding 1.00, citing "Published: January 21, 1993." Three
+    emoji are three characters, so the min-length rail passed them through, and
+    both retrievers then saw an empty term list — which yields arbitrary
+    passages that still clear the abstention floor.
+    """
+    from vrag.harness.contracts import Decision
+    from vrag.guardrails.input_rails import check_input
+
+    for text in ("\U0001F389\U0001F389\U0001F389", "...", "???", "$$$", "   "):
+        verdict = check_input(text)
+        assert not verdict.allowed, f"symbol-only query was allowed: {text!r}"
+        assert verdict.decision is Decision.REJECT_MALFORMED
+        assert "no_searchable_terms" in verdict.triggered
+
+    # Digits count as searchable — "2024 olympics" is a real query.
+    for text in ("2024 olympics", "what is 2+2", "what is a corporation"):
+        assert check_input(text).allowed, f"real query was declined: {text!r}"
