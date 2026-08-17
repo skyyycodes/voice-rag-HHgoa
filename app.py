@@ -145,6 +145,14 @@ def _verdict_html(r) -> str:
         bits.append(f"grounding {r.grounding_score:.2f}")
     if r.triggered:
         bits.append("rails: " + html.escape(", ".join(r.triggered)))
+    # Degradation must be visible. The harness deliberately falls back to the
+    # extractive answerer when the LLM errors, times out, or its breaker is
+    # open — that is the right behaviour, but silently serving a *different*
+    # answer path than the one selected makes a broken dependency look like a
+    # working one. Found exactly that way: `llm` mode was quietly answering
+    # extractively on the deployed Space with no indication in the UI.
+    if r.degraded:
+        bits.append("degraded: " + html.escape(", ".join(r.degraded)))
     return (
         f'<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">'
         f'<span style="border:1px solid {colour};color:{colour};border-radius:999px;'

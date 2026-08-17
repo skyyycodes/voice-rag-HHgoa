@@ -207,10 +207,18 @@ class Settings(BaseSettings):
         default="", validation_alias=AliasChoices("VRAG_GROQ_API_KEY", "GROQ_API_KEY")
     )
     groq_base_url: str = "https://api.groq.com/openai/v1"
-    # Model IDs on free tiers get retired with little notice. This is a setting,
-    # not a constant, so a dead default is a one-line Space variable to fix
-    # rather than a redeploy.
-    groq_model: str = "llama-3.3-70b-versatile"
+    # Model IDs on free tiers get retired with little notice — `llama-3.3-70b-
+    # versatile` started returning 404 `model_not_found` within hours of being
+    # set here. This is a setting, not a constant, so a dead default is a
+    # one-line Space variable to fix rather than a redeploy.
+    #
+    # Chosen by measurement on a Hindi grounded-answer prompt, not reputation:
+    #   qwen/qwen3.6-27b    HTTP 400 — cannot hold the JSON schema
+    #   openai/gpt-oss-20b   617ms — good Hindi, but cited passage [12] of 2
+    #   openai/gpt-oss-120b 1457ms — good Hindi, cited [1] correctly
+    # The 20b is 2.4x faster and invents citation indices. Citations are the
+    # product here, so the slower model wins.
+    groq_model: str = "openai/gpt-oss-120b"
 
     @property
     def chunk_store(self) -> Path:
