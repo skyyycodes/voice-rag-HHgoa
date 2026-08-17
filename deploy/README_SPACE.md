@@ -28,7 +28,10 @@ it drew from, with the quoted span highlighted in context.
 
 **Set `SARVAM_API_KEY` as a Space secret** to enable the microphone. Without it
 the text box still works and exercises everything downstream of transcription.
-`ANTHROPIC_API_KEY` is optional and enables the fluent LLM answer path.
+`GROQ_API_KEY` (free — console.groq.com/keys) enables the fluent LLM answer
+path. `ANTHROPIC_API_KEY` does the same and takes precedence if both are set.
+Neither is required: without them the extractive path answers everything, and
+it is the one benchmarked against the 200ms target.
 
 Latency shown per request is measured in-process — there is no HTTP hop
 inflating or hiding it.

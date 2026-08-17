@@ -24,6 +24,8 @@ sys.path.insert(0, str(ROOT / "src"))
 
 import gradio as gr  # noqa: E402
 
+from vrag.answer.llm import LLMAnswerer, resolve_provider  # noqa: E402
+from vrag.answer.llm import is_configured as llm_is_configured  # noqa: E402
 from vrag.config import settings  # noqa: E402
 from vrag.harness.contracts import QueryRequest  # noqa: E402
 from vrag.harness.orchestrator import Pipeline  # noqa: E402
@@ -36,7 +38,11 @@ from vrag.stt import build_transcribers  # noqa: E402
 # ---------------------------------------------------------------------------
 RETRIEVER = HybridRetriever.load(settings)
 TRANSCRIBERS = build_transcribers(settings)
-PIPELINE = Pipeline(RETRIEVER, transcribers=TRANSCRIBERS, cfg=settings)
+# Same wiring as `vrag.server`: without this the "llm" radio silently does
+# nothing, because the orchestrator skips the stage when no answerer was passed.
+LLM = LLMAnswerer(settings) if llm_is_configured(settings) else None
+LLM_PROVIDER = resolve_provider(settings)
+PIPELINE = Pipeline(RETRIEVER, transcribers=TRANSCRIBERS, cfg=settings, llm_answerer=LLM)
 MANIFEST = json.loads(settings.manifest.read_text()) if settings.manifest.exists() else {}
 
 # ---------------------------------------------------------------------------
@@ -92,6 +98,11 @@ if spaces is not None:
         return "Retrieval runs on CPU (int8 ONNX). No GPU is used at query time."
 
 
+LLM_INFO = (
+    f"extractive is the sub-200ms path; llm runs on {LLM_PROVIDER}"
+    if LLM_PROVIDER
+    else "extractive is the sub-200ms path; llm needs GROQ_API_KEY (free) or ANTHROPIC_API_KEY"
+)
 STT_READY = bool(TRANSCRIBERS)
 DECISION_COLOUR = {
     "answer": "#0f9d58",
@@ -183,9 +194,17 @@ def ask(text: str, audio_path: str | None, mode: str):
     r = _run(request)
     answer = r.answer if r.decision.value == "answer" else (r.reason or "—")
     depth = f"{r.rerank_depth} pairs" if r.rerank_depth else "skipped"
+    # The 200ms target applies to the extractive path — that is the one the
+    # benchmark measures. Reporting "over budget" on an LLM round trip reads as
+    # a failed requirement when it is a different mode with a different claim.
+    if r.mode == "llm":
+        budget = "**outside** the 200 ms budget by design — that target is the `extractive` path"
+    elif r.budget_exceeded:
+        budget = "**over** the 200 ms budget"
+    else:
+        budget = "**within** the 200 ms budget"
     headline = (
-        f"**{r.pipeline_ms:.1f} ms** pipeline · "
-        f"{'**within**' if not r.budget_exceeded else '**over**'} the 200 ms budget · "
+        f"**{r.pipeline_ms:.1f} ms** pipeline · {budget} · "
         f"cross-encoder reranked **{depth}**"
     )
     return answer, _verdict_html(r), _citation_html(r), _timings_rows(r), headline
@@ -284,7 +303,7 @@ with gr.Blocks(title="Voice RAG — MSMARCO-XI") as demo:
                                 label="…or speak", interactive=STT_READY)
     with gr.Row():
         mode = gr.Radio(["extractive", "llm"], value="extractive", label="Answer mode",
-                        info="extractive is the sub-200ms path; llm needs ANTHROPIC_API_KEY")
+                        info=LLM_INFO)
         ask_btn = gr.Button("Ask", variant="primary")
 
     headline = gr.Markdown(elem_classes="headline")

@@ -194,6 +194,24 @@ class Settings(BaseSettings):
     llm_model: str = "claude-opus-5"
     llm_timeout_s: float = 20.0
 
+    # Groq is the free alternative, so the deployed demo can show the fluent
+    # answer path without anyone holding a paid key. It speaks the
+    # OpenAI-compatible chat-completions shape, so no extra SDK is needed —
+    # httpx is already a dependency.
+    #
+    # `llm_provider="auto"` prefers Anthropic when its key is present and falls
+    # back to Groq, so a local .env with either one just works. Pin it
+    # explicitly to make the choice non-negotiable on a given deployment.
+    llm_provider: str = "auto"  # auto | anthropic | groq
+    groq_api_key: str = Field(
+        default="", validation_alias=AliasChoices("VRAG_GROQ_API_KEY", "GROQ_API_KEY")
+    )
+    groq_base_url: str = "https://api.groq.com/openai/v1"
+    # Model IDs on free tiers get retired with little notice. This is a setting,
+    # not a constant, so a dead default is a one-line Space variable to fix
+    # rather than a redeploy.
+    groq_model: str = "llama-3.3-70b-versatile"
+
     @property
     def chunk_store(self) -> Path:
         return self.index_dir / "chunks.arrow"
