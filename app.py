@@ -147,19 +147,23 @@ LLM_INFO = (
     else "extractive is the sub-200ms path; llm needs GROQ_API_KEY (free) or ANTHROPIC_API_KEY"
 )
 STT_READY = bool(TRANSCRIBERS)
+# Verdict colours are the event palette, and deliberately light: this markup is
+# rendered once on the server and embedded in two pages with different grounds —
+# the Gradio app's near-black and the deployed front end's brand green. The
+# mid-tone web colours used before (#0f9d58, #b26a00) disappeared against green.
 DECISION_COLOUR = {
-    "answer": "#0f9d58",
-    "abstain_no_evidence": "#b26a00",
-    "abstain_ungrounded": "#b26a00",
-    "reject_off_topic": "#b26a00",
-    "refuse_unsafe": "#c62828",
-    "reject_malformed": "#c62828",
-    "error": "#c62828",
+    "answer": "#9AC95F",
+    "abstain_no_evidence": "#FEE101",
+    "abstain_ungrounded": "#FEE101",
+    "reject_off_topic": "#FEE101",
+    "refuse_unsafe": "#FF0080",
+    "reject_malformed": "#FF0080",
+    "error": "#FF0080",
 }
 
 
 def _verdict_html(r) -> str:
-    colour = DECISION_COLOUR.get(r.decision.value, "#5c6474")
+    colour = DECISION_COLOUR.get(r.decision.value, "#A9D3B8")
     bits = []
     if r.transcript:
         bits.append(f"heard: “{html.escape(r.transcript)}”")
@@ -184,7 +188,7 @@ def _verdict_html(r) -> str:
         f'<span style="border:1px solid {colour};color:{colour};border-radius:999px;'
         f'padding:4px 11px;font:600 11px/1 ui-monospace,monospace;letter-spacing:.05em">'
         f'{r.decision.value.replace("_", " ").upper()}</span>'
-        f'<span style="color:#8a92a3;font-size:12.5px">{" · ".join(bits)}</span></div>'
+        f'<span style="color:#A9D3B8;font-size:12.5px">{" · ".join(bits)}</span></div>'
     )
 
 
@@ -201,7 +205,8 @@ def _citation_html(r) -> str:
     if 0 <= c.span_start < c.span_end <= len(body):
         body = (
             html.escape(body[: c.span_start])
-            + '<mark style="background:rgba(15,157,88,.22);padding:1px 3px;border-radius:3px">'
+            + '<mark style="background:rgba(254,225,1,.26);color:inherit;padding:1px 3px;'
+            'border-radius:3px">'
             + html.escape(body[c.span_start : c.span_end])
             + "</mark>"
             + html.escape(body[c.span_end :])
@@ -209,8 +214,9 @@ def _citation_html(r) -> str:
     else:
         body = html.escape(body)
     return (
-        f'<div style="border-left:2px solid #d0d5de;padding:8px 0 8px 12px;margin-top:10px">'
-        f'<div style="color:#8a92a3;font:11px ui-monospace,monospace;margin-bottom:4px">'
+        f'<div style="border-left:2px solid rgba(254,225,1,.45);padding:8px 0 8px 12px;'
+        f'margin-top:10px">'
+        f'<div style="color:#A9D3B8;font:11px ui-monospace,monospace;margin-bottom:4px">'
         f"cited chunk {c.chunk_id} · {c.lang} · score {c.score:.3f}</div>"
         f'<div style="font-size:13.5px;line-height:1.6">{body}</div></div>'
     )
@@ -399,7 +405,7 @@ def _bench_tiles() -> str:
         f'<span class="tile-v">{v}<i>{u}</i></span></div>'
         for k, v, u in tiles
     )
-    n = data.get("config", {}).get("n_queries", "")
+    n = data.get("config", {}).get("queries", "")
     return (
         f'<div class="tiles">{cells}</div>'
         f'<div class="tiles-note">measured over {n} held-out queries · '
@@ -412,7 +418,7 @@ HERO = f"""
 <div class="hero">
   <div class="kicker">
     <span class="dot"></span>HACKER <b>गोवा</b> HOUSE
-    <span class="sep">·</span> TEAM SKYYCODES
+    <span class="sep">·</span> TEAM INDRION
   </div>
   <h1>Voice RAG <span>over MSMARCO-XI</span></h1>
   <p class="lede">

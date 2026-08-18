@@ -3,21 +3,26 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Voice RAG over MSMARCO-XI — Team SkyyCodes</title>
+<title>Voice RAG over MSMARCO-XI — Team Indrion</title>
 <meta name="description" content="Voice-enabled RAG over Indic MS MARCO. Sub-200ms retrieval, 7 chunking strategies, calibrated abstention.">
 <style>
   /* ---------------------------------------------------------------------
-     Instrument panel. The event's yellow/pink/green sit on a dark technical
-     base: this page is a measurement readout, and it should look like one.
+     The event's own palette, read off its artwork. Readouts and controls sit
+     on the brand green rather than a neutral dark, so the page belongs to the
+     event while still reading as an instrument panel.
 
      The --green/--yellow/--pink/--dim vars are load-bearing beyond theming —
      the backend returns pre-rendered timeline markup that references them by
      name, so renaming these silently greys out the latency bars.
      --------------------------------------------------------------------- */
   :root{
-    --bg:#0A0F0D; --panel:#0F1714; --panel2:#131E1A; --line:#1E2C26;
-    --ink:#E9F1EC; --dim:#7E9188; --faint:#4C5D56;
-    --yellow:#F5D949; --pink:#FF4D93; --green:#3ED598;
+    /* Sampled from the event artwork, not guessed: #036735 is the sky in the
+       sunrise illustration, so the page background and the image share one
+       colour and the scene blends into the page with no visible seam. */
+    --bg:#036735; --panel:rgba(1,58,29,.82); --panel2:rgba(0,38,18,.86);
+    --line:rgba(254,225,1,.30);
+    --ink:#FFFFFF; --dim:#A9D3B8; --faint:#7FB394;
+    --yellow:#FEE101; --pink:#FF0080; --green:#9AC95F;
     --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
     --serif:ui-serif,Georgia,"Times New Roman",serif;
   }
@@ -28,23 +33,56 @@
     font:15px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif;
     -webkit-font-smoothing:antialiased;
   }
-  .wrap{max-width:1140px;margin:0 auto;padding:0 20px 80px}
+
+  /* The illustration is the page ground, pinned to the bottom of the viewport
+     and fixed so content scrolls over it — the palms stay at the edges the way
+     the event site frames its panels.
+
+     It works because the sky in the artwork is #036735, the same value as
+     --bg, so the two meet with no seam. The mask only softens the upper crop
+     edge, which can land mid-sea depending on viewport ratio. */
+  body::before{
+    content:""; position:fixed; left:0; right:0; bottom:0;
+    height:min(68vh,660px); z-index:-1; pointer-events:none;
+    background:url("assets/sunrise.jpg") no-repeat center bottom/cover;
+    -webkit-mask-image:linear-gradient(180deg,transparent,#000 24%);
+    mask-image:linear-gradient(180deg,transparent,#000 24%);
+  }
+  .wrap{max-width:1140px;margin:0 auto;padding:0 20px 120px}
   a{color:var(--yellow)}
 
-  /* top rule ------------------------------------------------------------ */
-  .rule{height:3px;background:linear-gradient(90deg,var(--yellow),var(--pink),var(--green),var(--yellow));}
+  /* event band ----------------------------------------------------------- */
+  /* The strip's own motifs are green and pink with a transparent ground — it
+     is meant to sit on yellow, which is how it reads on the event site. */
+  .band{height:22px;background:var(--yellow) url("assets/band.svg") repeat-x center/auto 100%}
 
   /* hero ---------------------------------------------------------------- */
-  header{padding:34px 0 6px}
+  header{padding:30px 0 6px}
   .kicker{
     font:600 11px/1 var(--mono); letter-spacing:.18em; text-transform:uppercase;
     color:var(--yellow); display:flex; gap:9px; align-items:center; flex-wrap:wrap;
   }
   .kicker b{color:var(--pink)}
-  .kicker .sep{color:var(--line)}
-  .dot{width:7px;height:7px;border-radius:50%;background:var(--green);
-       box-shadow:0 0 0 3px rgba(62,213,152,.15)}
-  h1{font:600 clamp(30px,5vw,46px)/1.04 var(--serif);letter-spacing:-.02em;margin:14px 0 8px}
+  .kicker .sep{color:rgba(255,255,255,.28)}
+  .dot{width:7px;height:7px;border-radius:50%;background:var(--yellow);
+       box-shadow:0 0 0 3px rgba(254,225,1,.18)}
+
+  /* The event wordmark is artwork, not type — it carries its own drop shadow
+     and letterforms, so it is placed as an image and the गोवा badge is set
+     over it the way the event brand does. */
+  .mark{position:relative;display:inline-block;margin:20px 0 6px;max-width:min(560px,88%)}
+  .mark img{display:block;width:100%;height:auto}
+  .mark .goa{
+    position:absolute;left:50%;top:50%;transform:translate(-50%,-52%) rotate(-4deg);
+    background:var(--pink);color:#fff;font:700 clamp(15px,2.4vw,22px)/1 var(--serif);
+    padding:.30em .55em .38em;border-radius:7px;white-space:nowrap;
+    box-shadow:0 3px 0 rgba(0,0,0,.35);
+  }
+  .meta{display:flex;gap:9px;flex-wrap:wrap;align-items:center;margin:6px 0 16px}
+  .pill{border:1px solid var(--line);border-radius:7px;padding:5px 11px;
+        font:600 11px/1 var(--mono);letter-spacing:.09em;color:var(--dim)}
+  .pill.hot{border-color:rgba(255,0,128,.55);color:var(--pink)}
+  h1{font:600 clamp(22px,3.2vw,30px)/1.15 var(--serif);letter-spacing:-.015em;margin:0 0 8px}
   h1 em{color:var(--dim);font-style:italic}
   .lede{color:var(--dim);font-size:15px;max-width:74ch;margin:0 0 22px}
   .lede b{color:var(--ink);font-weight:600}
@@ -57,12 +95,13 @@
   .tile-v{font:600 28px/1 var(--mono);color:var(--yellow)}
   .tile-v i{font:500 12px/1 var(--mono);font-style:normal;color:var(--dim);margin-left:4px}
   .tile.good .tile-v{color:var(--green)}
-  .tiles-note{font:11.5px/1.5 var(--mono);color:#5B6E67;margin:10px 0 0}
+  .tiles-note{font:11.5px/1.5 var(--mono);color:var(--faint);margin:10px 0 0}
 
   /* panels -------------------------------------------------------------- */
   .grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:26px}
   @media(max-width:860px){.grid{grid-template-columns:1fr}}
-  .panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:13px;padding:18px;
+         backdrop-filter:blur(2px)}
   .panel h2{font:600 11px/1 var(--mono);letter-spacing:.15em;text-transform:uppercase;
             color:var(--dim);margin:0 0 14px;display:flex;align-items:center;gap:8px}
   .panel h2 .accent{color:var(--yellow)}
@@ -78,20 +117,20 @@
          background:var(--panel2);color:var(--dim);padding:9px 14px;transition:.12s}
   button:hover:not(:disabled){color:var(--ink);border-color:var(--yellow)}
   button:disabled{opacity:.45;cursor:not-allowed}
-  button.primary{background:var(--yellow);color:#101613;border:none;font-weight:700;padding:10px 22px}
-  button.primary:hover:not(:disabled){filter:brightness(1.08);color:#101613}
+  button.primary{background:var(--yellow);color:#04351B;border:none;font-weight:700;padding:10px 22px}
+  button.primary:hover:not(:disabled){filter:brightness(1.08);color:#04351B}
   button.rec{border-color:var(--pink);color:var(--pink)}
   button.rec.on{background:var(--pink);color:#fff;animation:pulse 1.2s infinite}
   @keyframes pulse{50%{opacity:.65}}
   .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden}
   .seg button{border:none;border-radius:0;padding:8px 15px;font-size:13px}
-  .seg button.on{background:var(--panel2);color:var(--yellow)}
+  .seg button.on{background:rgba(254,225,1,.14);color:var(--yellow)}
   .muted{color:var(--faint);font:11.5px/1.5 var(--mono)}
 
   /* probes -------------------------------------------------------------- */
   .chips{display:flex;flex-wrap:wrap;gap:7px}
   .chips button{font:500 12px var(--mono);padding:7px 11px}
-  .chips button.pos{border-color:#2A4B3D;color:#6FBF9B}
+  .chips button.pos{border-color:rgba(154,201,95,.55);color:var(--green)}
 
   /* result -------------------------------------------------------------- */
   #result{margin-top:14px;display:none}
@@ -111,7 +150,7 @@
   .tl-track{background:var(--panel2);border-radius:3px;height:9px;overflow:hidden}
   .tl-track i{display:block;height:100%;border-radius:3px}
   .tl-ms{text-align:right;color:var(--ink)}
-  .tl-note{color:#55665F;font-size:11px}
+  .tl-note{color:var(--faint);font-size:11px}
   .tl-total{border-top:1px solid var(--line);margin-top:4px;padding-top:9px}
   .tl-total .tl-name,.tl-total .tl-ms{color:var(--ink);font-weight:600}
   .tl-budget{background:repeating-linear-gradient(90deg,var(--panel2) 0 3px,transparent 3px 6px)}
@@ -123,24 +162,34 @@
   table{border-collapse:collapse;width:100%;font:12px var(--mono);min-width:620px}
   th{text-align:left;color:var(--dim);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line);
      white-space:nowrap}
-  td{padding:8px 10px;border-bottom:1px solid rgba(30,44,38,.5);vertical-align:top}
+  td{padding:8px 10px;border-bottom:1px solid rgba(255,255,255,.09);vertical-align:top}
   tr:last-child td{border-bottom:none}
   td.n{text-align:right;color:var(--ink)}
   .below{color:var(--yellow)}
   .tag{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid var(--line);color:var(--dim)}
-  .tag.both{border-color:#2A4B3D;color:var(--green)}
-  .tag.dense{border-color:#4A3D6B;color:#B49CE8}
-  .tag.bm25{border-color:#5C4A22;color:var(--yellow)}
+  .tag.both{border-color:rgba(154,201,95,.5);color:var(--green)}
+  .tag.dense{border-color:rgba(255,255,255,.34);color:#FFF}
+  .tag.bm25{border-color:rgba(254,225,1,.45);color:var(--yellow)}
 
   .note{color:var(--dim);font-size:13px;margin-top:12px}
   .note b{color:var(--ink)}
   .err{color:var(--pink);font:12.5px var(--mono)}
 
-  footer{margin-top:44px;padding-top:22px;border-top:1px solid var(--line);
-         display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;
-         color:var(--faint);font:11.5px/1.7 var(--mono)}
+  /* footer scene ---------------------------------------------------------- */
+  /* The sunrise illustration sits where it belongs on the event brand — at the
+     foot of the page — rather than behind copy, where its bright greens would
+     fight every readable thing on top of it. Cropped to the horizon band and
+     faded into the page so it reads as a closing image, not a backdrop. */
+  /* The footer lands on the brightest part of the artwork — sand and white
+     houses — so it carries its own ground rather than relying on the page. */
+  footer{margin-top:34px;padding:18px 20px;border-radius:13px;
+         background:var(--panel);border:1px solid var(--line);
+         display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
+         align-items:flex-end;color:var(--dim);font:11.5px/1.7 var(--mono)}
   footer a{color:var(--dim);text-decoration:none;margin-right:14px}
   footer a:hover{color:var(--yellow)}
+  .studio{display:flex;align-items:center;gap:10px}
+  .studio img{height:30px;width:auto;opacity:.85}
 
   .spin{display:inline-block;width:11px;height:11px;border:2px solid var(--line);
         border-top-color:var(--yellow);border-radius:50%;animation:sp .7s linear infinite;
@@ -149,15 +198,27 @@
 </style>
 </head>
 <body>
-<div class="rule"></div>
+<div class="band"></div>
 <div class="wrap">
 
 <header>
   <div class="kicker">
-    <span class="dot"></span>HACKER <b>गोवा</b> HOUSE
-    <span class="sep">·</span> TEAM SKYYCODES
+    <span class="dot"></span>TEAM INDRION
     <span class="sep">·</span> MSMARCO-XI INDIC CORPUS
+    <span class="sep">·</span> #RAGInGoa
   </div>
+
+  <div class="mark">
+    <img src="assets/hackerhouse-wordmark.png" alt="Hacker House Goa" width="1148" height="237">
+    <span class="goa">गोवा</span>
+  </div>
+
+  <div class="meta">
+    <span class="pill">GOA, INDIA</span>
+    <span class="pill">28 – 31 OCT 2026</span>
+    <span class="pill hot">VOICE-ENABLED RAG SYSTEM</span>
+  </div>
+
   <h1>Voice RAG <em>over MSMARCO-XI</em></h1>
   <p class="lede">
     Ask in <b>Hindi</b>, <b>Bengali</b>, <b>Tamil</b> or <b>English</b> — by voice or text.
@@ -233,15 +294,21 @@
   </section>
 </div>
 
-<footer>
+
+  <footer>
   <div>
     <a id="spaceLink" href="#" target="_blank" rel="noopener">Hugging Face Space ↗</a>
     <a id="repoLink" href="#" target="_blank" rel="noopener">GitHub ↗</a>
     <a href="https://huggingface.co/datasets/ai4bharat/MSMARCO-XI" target="_blank" rel="noopener">Dataset ↗</a>
+    <div style="margin-top:8px">TEAM INDRION · #RAGInGoa · HACKER HOUSE GOA 2026</div>
   </div>
-  <div id="stamp">TEAM SKYYCODES · #RAGInGoa</div>
+  <div class="studio">
+    <img src="assets/studio-247.svg" alt="2:47 PM Studio" width="546" height="335">
+    <span>Hacker House is an event by<br>2:47 PM Studio</span>
+  </div>
 </footer>
 </div>
+<div class="band"></div>
 
 <script>
 /* =======================================================================
@@ -324,10 +391,14 @@ $("#spaceLink").href = SPACE;
 $("#repoLink").href = REPO;
 
 (async function boot(){
-  // The benchmark JSON ships with the Space; if it is unreachable the tiles
-  // stay blank rather than showing numbers nobody measured.
+  // The benchmark report is served from this origin, not from the Space.
+  // Gradio refuses arbitrary file paths (403 on /gradio_api/file=...), and even
+  // if it did not, the tiles would go blank whenever the Space was asleep —
+  // these are measured figures that should render before any backend is woken.
+  // `assets/bench.json` is a copy of bench/results/latest.json; re-copy it
+  // after re-running `python -m vrag.bench`.
   try{
-    const r = await fetch(`${SPACE}/gradio_api/file=bench/results/latest.json`);
+    const r = await fetch("assets/bench.json", {cache:"no-cache"});
     if(!r.ok) throw 0;
     const d = await r.json();
     const p = d.latency_pipeline_ms, b = d.budget;
@@ -340,13 +411,13 @@ $("#repoLink").href = REPO;
     $("#tiles").innerHTML = tiles.map(([k,v,u,cls]) =>
       `<div class="tile ${cls}"><span class="tile-k">${k}</span>
        <span class="tile-v">${v}<i>${u}</i></span></div>`).join("");
-    const n = (d.config && d.config.n_queries) || "";
+    const n = (d.config && d.config.queries) || "";
     $("#tilesNote").textContent =
       `measured over ${n} held-out queries · target ${b.target_ms.toFixed(0)} ms · ` +
       `speech-to-text excluded (it is a network call)`;
   }catch{
     $("#tilesNote").textContent =
-      "benchmark report unavailable — run `uv run python -m vrag.bench` and redeploy";
+      "benchmark report not found — copy bench/results/latest.json to assets/bench.json";
   }
 })();
 
