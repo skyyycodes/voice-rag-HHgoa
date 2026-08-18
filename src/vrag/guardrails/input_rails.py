@@ -28,14 +28,60 @@ _UNSAFE_PATTERNS: list[tuple[str, re.Pattern]] = [
     (
         "weapons_synthesis",
         re.compile(
+            # `(a\s+)?` alone missed "how do i build **an** explosive" — caught by
+            # the red-team suite on its first run, not by any hand-written test.
             r"\b(how\s+(to|do\s+i)\s+(make|build|synthes\w*|construct)\s+"
-            r"(a\s+)?(bomb|explosive|nerve\s+agent|sarin|ricin|meth\w*|napalm))",
+            r"(a|an|the)?\s*(bomb|explosive|nerve\s+agent|sarin|ricin|meth\w*|napalm))",
             re.IGNORECASE,
         ),
     ),
     (
         "self_harm",
+        # Covers the *question* form. Stated intent is a separate rule below,
+        # because the two need different responses.
         re.compile(r"\b(how\s+to\s+(kill|hurt|harm)\s+(myself|yourself)|commit\s+suicide)\b", re.IGNORECASE),
+    ),
+    (
+        "self_harm_intent",
+        # Someone saying they intend to hurt themselves, rather than asking how.
+        #
+        # Found on the deployed page: "i will kill myself" was ANSWERED, citing
+        # a passage about cardio workouts. `self_harm` only matched the "how
+        # to …" phrasing, and the threat rule below deliberately excludes
+        # "myself" because its subject is other people.
+        #
+        # This is the one rail whose refusal message is not a refusal — see
+        # _UNSAFE_REASONS. Getting the wording right matters more here than
+        # anywhere else in the file.
+        re.compile(
+            r"\bi\s*(?:'?m\s+gonna|'?m\s+going\s+to|am\s+going\s+to|'?ll|will|"
+            r"wanna|want\s+to|gonna|feel\s+like|am\s+thinking\s+of|"
+            r"'?m\s+thinking\s+(?:of|about))\s+"
+            r"(?:kill(?:ing)?|hurt(?:ing)?|harm(?:ing)?|cut(?:ting)?)\s+myself\b"
+            r"|\bi\s+(?:want\s+to|wanna)\s+die\b(?!\s+my\s+hair)"
+            r"|\bi\s+(?:want\s+to|wanna)\s+end\s+(?:my\s+life|it\s+all)\b"
+            r"|\bi\s+(?:do\s?n[o']?t|dont)\s+want\s+to\s+(?:live|be\s+alive)\b"
+            r"|\bthinking\s+about\s+(?:suicide|killing\s+myself|ending\s+my\s+life)\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "self_harm_method",
+        # Dosage-to-harm questions. Unlike the rails above these read as
+        # ordinary medical queries, and the corpus *does* hold medical
+        # passages — so the evidence rail will not decline them the way it
+        # declines bomb-making, where the corpus simply has nothing to say.
+        #
+        # Narrow on purpose: "paracetamol dosage for a child" and "what is the
+        # maximum daily dose of ibuprofen" are normal questions and stay
+        # answerable. Only lethal/fatal/overdose framings match.
+        re.compile(
+            r"\b(?:lethal|fatal|deadly|toxic)\s+(?:dose|dosage|amount|quantity)\b"
+            r"|\bhow\s+(?:much|many)\s+\w+\s+(?:to|would)\s+(?:kill|overdose)\b"
+            r"|\bhow\s+(?:much|many)\s+\w+\s+(?:is|are)\s+(?:lethal|fatal|deadly)\b"
+            r"|\boverdose\s+(?:on|amount|how\s+much)\b",
+            re.IGNORECASE,
+        ),
     ),
     (
         "csam",
@@ -87,7 +133,77 @@ _UNSAFE_PATTERNS: list[tuple[str, re.Pattern]] = [
         # rule only covers it behind "how to".
         re.compile(r"\b(?:go\s+)?(?:kill|hang|shoot)\s+your\s?self\b", re.IGNORECASE),
     ),
+    # ---- Indic ------------------------------------------------------------
+    #
+    # Every rule above is English-only, which was a hole the size of the
+    # product: this corpus is Hindi, Bengali and Tamil, and "मैं खुद को मार
+    # डालूंगा" ("I will kill myself") passed straight through to retrieval.
+    #
+    # These match on high-signal *terms* rather than sentence grammar. Indic
+    # languages are morphologically rich with free word order, so a regex that
+    # tries to parse subject-intent-verb-object the way the English rules do
+    # would be both unreliable and unmaintainable by anyone who cannot read the
+    # output. Terms like आत्महत्या / আত্মহত্যা / தற்கொலை ("suicide") carry the
+    # signal on their own.
+    #
+    # Deliberately narrower than the English set, and it should be read by a
+    # native speaker of each script before anyone calls this coverage rather
+    # than mitigation. What it must not do is let the severe cases through
+    # silently, which is what it was doing.
+    (
+        "self_harm_indic",
+        re.compile(
+            # suicide (hin) · (ben) · (tam), and "kill/finish myself" phrasings
+            r"आत्महत्या|खुदकुशी|आत्म\s*हत्या"
+            r"|खुद\s*को\s*(?:मार|खत्म)|अपने\s*आप\s*को\s*मार"
+            r"|मरना\s*चाहत|मर\s*जाना\s*चाहत|जान\s*दे\s*दूं"
+            r"|আত্মহত্যা|নিজেকে\s*মের|মরতে\s*চাই|মরে\s*যেতে\s*চাই"
+            r"|தற்கொலை|என்னை\s*கொல்|சாக\s*வேண்டும்|இறக்க\s*வேண்டும்"
+        ),
+    ),
+    (
+        "violence_indic",
+        re.compile(
+            r"तुम्हें\s*मार|तुझे\s*मार|मार\s*डालूंगा|मार\s*डालूँगा|जान\s*से\s*मार"
+            r"|তোমাকে\s*মের|তোকে\s*মের|মেরে\s*ফেলব"
+            r"|உன்னை\s*கொல்|கொன்று\s*விடுவேன்"
+        ),
+    ),
+    (
+        "weapons_indic",
+        re.compile(
+            r"बम\s*(?:कैसे|बनान|बनाय|बनाने)|विस्फोटक\s*(?:कैसे|बनान)"
+            r"|বোমা\s*(?:কিভাবে|বানা|তৈরি)"
+            r"|குண்டு\s*(?:எப்படி|செய்)|வெடிகுண்டு"
+        ),
+    ),
 ]
+
+# Refusal wording, per rail.
+#
+# Every unsafe rail but one gets the same flat sentence, which is correct: the
+# system declines and says nothing more. Self-harm is different. Someone typing
+# "i will kill myself" is not making a request to be declined, and answering
+# them with "this falls outside what this system will answer" is the wrong
+# thing to put on a screen. The corpus still cannot help them — but a pointer
+# to someone who can costs nothing and is the only responsible output here.
+#
+# Indian numbers first (this corpus and its users are Indic), then a directory
+# that resolves anywhere else.
+_SELF_HARM_REASON = (
+    "This system cannot help with this, and it is not the right thing to ask a "
+    "search index. If you are thinking about harming yourself, please talk to "
+    "someone now — Tele-MANAS (India): 14416 or 1800-891-4416, free and open "
+    "24/7. Outside India, findahelpline.com lists services by country. If you "
+    "are in immediate danger, please contact your local emergency number."
+)
+_GENERIC_UNSAFE_REASON = "This request falls outside what this system will answer."
+_UNSAFE_REASONS: dict[str, str] = {
+    "self_harm": _SELF_HARM_REASON,
+    "self_harm_intent": _SELF_HARM_REASON,
+    "self_harm_indic": _SELF_HARM_REASON,
+    "self_harm_method": _SELF_HARM_REASON,
+}
 
 # Prompt injection. The extractive path cannot be hijacked by instructions in a
 # query, but the LLM path can, and the same rail must cover both — a guardrail
@@ -295,7 +411,7 @@ def check_input(text: str, cfg: Settings = settings) -> GuardVerdict:
             return GuardVerdict(
                 allowed=False,
                 decision=Decision.REFUSE_UNSAFE,
-                reason="This request falls outside what this system will answer.",
+                reason=_UNSAFE_REASONS.get(name, _GENERIC_UNSAFE_REASON),
                 triggered=[name],
             )
 
