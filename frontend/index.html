@@ -19,7 +19,7 @@
     /* Sampled from the event artwork, not guessed: #036735 is the sky in the
        sunrise illustration, so the page background and the image share one
        colour and the scene blends into the page with no visible seam. */
-    --bg:#036735; --panel:rgba(1,58,29,.82); --panel2:rgba(0,38,18,.86);
+    --bg:#036735; --panel:rgba(0,45,22,.55); --panel2:rgba(0,32,15,.62);
     --line:rgba(254,225,1,.30);
     --ink:#FFFFFF; --dim:#A9D3B8; --faint:#7FB394;
     --yellow:#FEE101; --pink:#FF0080; --green:#9AC95F;
@@ -34,21 +34,18 @@
     -webkit-font-smoothing:antialiased;
   }
 
-  /* The illustration is the page ground, pinned to the bottom of the viewport
-     and fixed so content scrolls over it — the palms stay at the edges the way
-     the event site frames its panels.
+  /* The illustration closes the page rather than sitting under it.
 
-     It works because the sky in the artwork is #036735, the same value as
-     --bg, so the two meet with no seam. The mask only softens the upper crop
-     edge, which can land mid-sea depending on viewport ratio. */
-  body::before{
-    content:""; position:fixed; left:0; right:0; bottom:0;
-    height:min(68vh,660px); z-index:-1; pointer-events:none;
+     Fixed behind the content it read as clutter: palms, rooftops and the GOA
+     BEACH sign all competed with the readouts, and the latency figures are the
+     thing this page exists to show. In document flow at the foot it still sets
+     the scene, and because the artwork's sky is #036735 — the same value as
+     --bg — it grows out of the page with no visible join. */
+  .scene{
+    height:clamp(230px,38vw,470px);margin-top:46px;
     background:url("assets/sunrise.jpg") no-repeat center bottom/cover;
-    -webkit-mask-image:linear-gradient(180deg,transparent,#000 24%);
-    mask-image:linear-gradient(180deg,transparent,#000 24%);
   }
-  .wrap{max-width:1140px;margin:0 auto;padding:0 20px 120px}
+  .wrap{max-width:1140px;margin:0 auto;padding:0 20px 8px}
   a{color:var(--yellow)}
 
   /* event band ----------------------------------------------------------- */
@@ -180,10 +177,7 @@
      foot of the page — rather than behind copy, where its bright greens would
      fight every readable thing on top of it. Cropped to the horizon band and
      faded into the page so it reads as a closing image, not a backdrop. */
-  /* The footer lands on the brightest part of the artwork — sand and white
-     houses — so it carries its own ground rather than relying on the page. */
-  footer{margin-top:34px;padding:18px 20px;border-radius:13px;
-         background:var(--panel);border:1px solid var(--line);
+  footer{margin-top:30px;padding-top:20px;border-top:1px solid var(--line);
          display:flex;justify-content:space-between;gap:20px;flex-wrap:wrap;
          align-items:flex-end;color:var(--dim);font:11.5px/1.7 var(--mono)}
   footer a{color:var(--dim);text-decoration:none;margin-right:14px}
@@ -308,6 +302,7 @@
   </div>
 </footer>
 </div>
+<div class="scene"></div>
 <div class="band"></div>
 
 <script>

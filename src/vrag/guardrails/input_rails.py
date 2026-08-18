@@ -43,7 +43,49 @@ _UNSAFE_PATTERNS: list[tuple[str, re.Pattern]] = [
     ),
     (
         "targeted_violence",
-        re.compile(r"\bhow\s+to\s+(kill|murder|poison)\s+(?!a\s+(mockingbird|process|bug))\w+", re.IGNORECASE),
+        # Keyed on the *object* being a person, not on the verb.
+        #
+        # The previous rule was `how to (kill|murder|poison) <anything>` with a
+        # three-word exemption list, which refused "how to kill weeds in my
+        # lawn" and "how to kill bacteria in water" — ordinary gardening and
+        # hygiene questions this corpus can answer. Enumerating harmless
+        # objects is unwinnable; enumerating people is small and stable.
+        re.compile(
+            r"\bhow\s+(?:to|do\s+i)\s+(?:kill|murder|poison|stab|strangle|behead)\s+"
+            r"(?:someone|somebody|a\s+person|people|persons|him|her|them|"
+            r"a\s+human|humans|my\s+(?:wife|husband|partner|ex|boss|neighbou?r|"
+            r"teacher|classmate|co-?worker|colleague|sister|brother|mother|father|"
+            r"mom|dad|parents|friend|roommate|family))\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "violent_threat",
+        # A stated intention to hurt a named party. Found by testing the
+        # deployed page: "i wanna kill you" was ANSWERED — with song lyrics,
+        # because the corpus contains a passage about wanting to scream. Every
+        # violence rule above requires the phrasing "how to …", so a direct
+        # threat matched nothing at all.
+        #
+        # Anchored on first person + intent + harm verb + a person object, so
+        # "i want to kill a process" and "i'm going to kill this bug" are
+        # untouched.
+        re.compile(
+            r"\bi\s*(?:'?m\s+gonna|'?m\s+going\s+to|am\s+going\s+to|'?ll|will|"
+            r"wanna|want\s+to|gonna)\s+"
+            r"(?:kill|murder|stab|shoot|strangle|behead|hurt|harm|beat\s+up|rape)\s+"
+            r"(?:you|u|him|her|them|someone|somebody|"
+            r"my\s+(?:wife|husband|partner|ex|boss|neighbou?r|teacher|classmate|"
+            r"co-?worker|colleague|sister|brother|mother|father|mom|dad|parents|"
+            r"friend|roommate|family))\b",
+            re.IGNORECASE,
+        ),
+    ),
+    (
+        "harassment",
+        # "kill yourself" as an instruction to another person. The self_harm
+        # rule only covers it behind "how to".
+        re.compile(r"\b(?:go\s+)?(?:kill|hang|shoot)\s+your\s?self\b", re.IGNORECASE),
     ),
 ]
 
